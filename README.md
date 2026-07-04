@@ -13,8 +13,10 @@ or images. Served to agents as MCP tools via the `mcp.tool.invoke` hook.
 | `clear_session` | Wipe the target's events, todos, and attachments and reset its conversation. **Destructive.** |
 | `send_message` | Deliver a text message to the target and resume it. |
 | `send_image` | Deliver a base64 image (with optional caption) to the target as an attachment. |
+| `find_session` | List sessions across every folder/project (no boundary) to resolve a target id; optional substring `query`. |
 
-All tools take a `session_id`. Discover ids with the core `list_sessions` /
+Every action takes a `session_id`. Discover ids with this plugin's own
+`find_session` tool (folder-blind), or the core `list_sessions` /
 `search_sessions` MCP tools.
 
 ## Boundary
@@ -30,7 +32,8 @@ shapes the tool I/O.
 - `provide_mcp_tools` — declare the MCP tools above.
 - `session_control` — call the core session-control host functions
   (`peckboard_interrupt_session`, `peckboard_terminate_agent`,
-  `peckboard_clear_session`, `peckboard_send_message`).
+  `peckboard_clear_session`, `peckboard_send_message`, and the folder-blind
+  discovery function `peckboard_list_all_sessions`).
 
 ## Build
 

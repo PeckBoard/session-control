@@ -1,6 +1,6 @@
 [package]
 name = "peckboard-session-control-plugin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Control another Peckboard session from a session: interrupt, terminate, clear, and send messages/images, served as a WASM plugin."
 repository = "https://github.com/PeckBoard/session-control"

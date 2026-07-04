@@ -1,7 +1,8 @@
 //! The session-control tools. Each validates its arguments and forwards to the
 //! matching core host function, which performs the actual (fire-and-forget)
-//! action on the target session. Discovery of session ids is done by the agent
-//! via the core `list_sessions` / `search_sessions` MCP tools.
+//! action on the target session. Session ids are discovered folder-blind via
+//! this plugin's own `find_session` tool (or the core `list_sessions` /
+//! `search_sessions` MCP tools).
 
 use serde_json::{Value, json};
 
@@ -49,6 +50,13 @@ pub fn send_message_tool(args: Value) -> Result<Value, String> {
         HostFn::SendMessage,
         &json!({ "session_id": session_id, "text": text }),
     )
+}
+
+pub fn find_session_tool(args: Value) -> Result<Value, String> {
+    // Optional case-insensitive substring filter; empty means "list every
+    // session". Discovery is folder-blind, matching the control actions.
+    let query = opt_str(&args, "query", "");
+    call_host(HostFn::ListSessions, &json!({ "query": query }))
 }
 
 pub fn send_image_tool(args: Value) -> Result<Value, String> {

@@ -12,11 +12,14 @@
 //! - **send_message** — deliver a text message to the target and resume it.
 //! - **send_image** — deliver an image (base64) to the target as an attachment,
 //!   with an optional caption.
+//! - **find_session** — list sessions across every folder/project so a target
+//!   id (e.g. resolved from a `conversation_id`) can be found.
 //!
 //! There is intentionally no boundary: any session can be controlled by id (the
 //! operator grants this by approving the plugin's `session_control` permission).
-//! Use the core `list_sessions` / `search_sessions` MCP tools to discover the
-//! session ids to act on. The actual actions are performed host-side in
+//! Discover session ids with this plugin's own **find_session** tool (which is
+//! folder-blind), or the core `list_sessions` / `search_sessions` MCP tools. The
+//! actual actions are performed host-side in
 //! Peckboard core's session-control host functions; this plugin declares the
 //! `session_control` permission and shapes the tool I/O.
 //!
@@ -94,6 +97,7 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         "clear_session" => control::clear_session_tool(args),
         "send_message" => control::send_message_tool(args),
         "send_image" => control::send_image_tool(args),
+        "find_session" => control::find_session_tool(args),
         other => return cancel(&format!("session-control does not provide tool '{other}'")),
     };
 

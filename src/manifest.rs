@@ -81,6 +81,19 @@ pub fn manifest_json() -> String {
                     "required": ["session_id", "image_base64", "mime_type"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "find_session",
+                "title": "Find sessions across all folders",
+                "description": "List sessions anywhere in this Peckboard instance -- every folder and project, no boundary -- so you can resolve a target for the other session-control tools. Returns each match's session_id, name, folder_id, project_id, conversation_id, model, worker/expert flags, card_id, and last_activity, newest first. Pass an optional 'query' to filter by a case-insensitive substring of the id, name, conversation_id, model, or folder_id; omit it to list every session.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Optional case-insensitive substring to match against session id, name, conversation_id, model, or folder_id. Omit to list every session." }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
             }
         ],
 

@@ -16,6 +16,7 @@ pub enum HostFn {
     TerminateAgent,
     ClearSession,
     SendMessage,
+    ListSessions,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -28,6 +29,7 @@ mod imp {
         fn peckboard_interrupt_session(input: String) -> String;
         fn peckboard_terminate_agent(input: String) -> String;
         fn peckboard_clear_session(input: String) -> String;
+        fn peckboard_list_all_sessions(input: String) -> String;
         fn peckboard_send_message(input: String) -> String;
     }
 
@@ -44,6 +46,7 @@ mod imp {
                 HostFn::TerminateAgent => peckboard_terminate_agent(s),
                 HostFn::ClearSession => peckboard_clear_session(s),
                 HostFn::SendMessage => peckboard_send_message(s),
+                HostFn::ListSessions => peckboard_list_all_sessions(s),
             }
         }
         .map_err(|e| e.to_string())?;
