@@ -1,6 +1,4 @@
-//! The plugin manifest: identity, the single `mcp.tool.invoke` hook, the MCP
-//! tools this plugin provides (with their input schemas), and the host
-//! permission those tools require (`session_control`).
+//! Plugin manifest: identity, hooks, MCP tools, and host permissions.
 
 /// Build the manifest JSON string returned by the `manifest` export.
 pub fn manifest_json() -> String {
@@ -15,7 +13,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "interrupt_session",
                 "title": "Interrupt a session",
-                "description": "Stop another session's in-flight agent turn (cancel the current run) without deleting the session or its history. Use to halt a session that's working on the wrong thing. Discover session ids with list_sessions / search_sessions.",
+                "description": "Stop another session's in-flight agent turn (cancel the current run) without deleting the session or its history. Same-folder targets run immediately; cross-folder targets ask the user (Approve once / Approve always / Deny) and return status awaiting_approval until answered — then re-call with the same session_id. Discover ids with find_session / list_sessions.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -28,7 +26,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "terminate_agent",
                 "title": "Terminate a session's agent",
-                "description": "Kill another session's long-lived agent process. Unlike interrupt (which stops the current turn), this tears the process down entirely; the next message to that session starts a fresh agent. The transcript is preserved.",
+                "description": "Kill another session's long-lived agent process. Unlike interrupt (which stops the current turn), this tears the process down entirely; the next message to that session starts a fresh agent. The transcript is preserved. Same-folder immediate; cross-folder asks Approve once / Always / Deny.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -41,7 +39,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "clear_session",
                 "title": "Clear a session",
-                "description": "Wipe another session: cancel any running turn, delete its entire event history and todos, drop its attachments, and reset its conversation so it starts fresh. Destructive and irreversible — the transcript is gone.",
+                "description": "Wipe another session: cancel any running turn, delete its entire event history and todos, drop its attachments, and reset its conversation so it starts fresh. Destructive and irreversible. Same-folder immediate; cross-folder asks Approve once / Always / Deny.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -54,7 +52,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "send_message",
                 "title": "Send a message to a session",
-                "description": "Deliver a text message to another session as if it were a user message, and resume that session (spawning its agent if idle, or injecting/queuing if it's mid-turn). Use to instruct, answer, or redirect another session.",
+                "description": "Deliver a text message to another session as if it were a user message, and resume that session. Same-folder immediate; cross-folder asks Approve once / Always / Deny (re-call after the user answers).",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -68,7 +66,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "send_image",
                 "title": "Send an image to a session",
-                "description": "Deliver an image to another session as an attachment on a (resumed) user message, with an optional caption. Provide the image as base64 plus its mime type.",
+                "description": "Deliver an image to another session as an attachment on a (resumed) user message, with an optional caption. Same-folder immediate; cross-folder asks Approve once / Always / Deny.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -85,7 +83,7 @@ pub fn manifest_json() -> String {
             {
                 "name": "find_session",
                 "title": "Find sessions across all folders",
-                "description": "List sessions anywhere in this Peckboard instance -- every folder and project, no boundary -- so you can resolve a target for the other session-control tools. Returns each match's session_id, name, folder_id, project_id, conversation_id, model, worker/expert flags, card_id, and last_activity, newest first. Pass an optional 'query' to filter by a case-insensitive substring of the id, name, conversation_id, model, or folder_id; omit it to list every session.",
+                "description": "List sessions anywhere in this Peckboard instance -- every folder and project -- so you can resolve a target for the other session-control tools. Discovery does not require approval; acting on a cross-folder match does. Returns session_id, name, folder_id, project_id, conversation_id, model, worker/expert flags, card_id, and last_activity, newest first. Optional 'query' filters by case-insensitive substring.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -99,7 +97,9 @@ pub fn manifest_json() -> String {
 
         "permissions": [
             "provide_mcp_tools",
-            "session_control"
+            "session_control",
+            "ask_user",
+            "data_store"
         ],
     });
     manifest.to_string()

@@ -1,22 +1,26 @@
-//! FFI layer: the Peckboard core session-control host functions this plugin
-//! calls, as thin JSON wrappers.
+//! FFI layer: Peckboard core host functions this plugin calls.
 //!
 //! Every host function is JSON-string-in / JSON-string-out and returns an
 //! `{"error": "..."}` envelope instead of trapping; [`call_host`] turns that
 //! envelope into an `Err(String)` so tool code can use `?`.
 //!
-//! The FFI exists only on `wasm32` (the Extism host imports are unavailable on
+//! The FFI exists only on `wasm32` (Extism host imports are unavailable on
 //! the host target used for `cargo test`), so host builds get an
 //! `unimplemented!()` stub the tests never reach.
 
-/// Which host function a [`call_host`] targets. Each is gated host-side on the
-/// `session_control` permission this plugin declares (see `manifest.rs`).
+/// Which host function a [`call_host`] targets.
 pub enum HostFn {
     InterruptSession,
     TerminateAgent,
     ClearSession,
     SendMessage,
     ListSessions,
+    CallerScope,
+    AskUser,
+    GetAnswer,
+    StorePut,
+    StoreGet,
+    StoreDelete,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31,6 +35,12 @@ mod imp {
         fn peckboard_clear_session(input: String) -> String;
         fn peckboard_list_all_sessions(input: String) -> String;
         fn peckboard_send_message(input: String) -> String;
+        fn peckboard_caller_scope(input: String) -> String;
+        fn peckboard_ask_user(input: String) -> String;
+        fn peckboard_get_answer(input: String) -> String;
+        fn peckboard_store_put(input: String) -> String;
+        fn peckboard_store_get(input: String) -> String;
+        fn peckboard_store_delete(input: String) -> String;
     }
 
     /// Invoke a host function with a JSON value, parse its JSON reply, and
@@ -47,6 +57,12 @@ mod imp {
                 HostFn::ClearSession => peckboard_clear_session(s),
                 HostFn::SendMessage => peckboard_send_message(s),
                 HostFn::ListSessions => peckboard_list_all_sessions(s),
+                HostFn::CallerScope => peckboard_caller_scope(s),
+                HostFn::AskUser => peckboard_ask_user(s),
+                HostFn::GetAnswer => peckboard_get_answer(s),
+                HostFn::StorePut => peckboard_store_put(s),
+                HostFn::StoreGet => peckboard_store_get(s),
+                HostFn::StoreDelete => peckboard_store_delete(s),
             }
         }
         .map_err(|e| e.to_string())?;
@@ -63,8 +79,6 @@ mod imp {
     }
 }
 
-// Host-target stub so the crate links for `cargo test` (no host imports exist
-// off-wasm; no test calls a host-backed tool).
 #[cfg(not(target_arch = "wasm32"))]
 mod imp {
     use super::HostFn;

@@ -1,27 +1,15 @@
 //! Peckboard session-control plugin (WASM / Extism).
 //!
-//! Lets one session take full control of another, provided to Peckboard as MCP
-//! tools via the `mcp.tool.invoke` hook:
+//! Lets one session control another via MCP tools (`mcp.tool.invoke`):
 //!
-//! - **interrupt_session** — stop the target's in-flight turn (cancel the
-//!   current run without deleting anything).
-//! - **terminate_agent** — kill the target's long-lived agent process; the next
-//!   message starts a fresh one.
-//! - **clear_session** — wipe the target's transcript / todos / attachments and
-//!   reset its conversation.
-//! - **send_message** — deliver a text message to the target and resume it.
-//! - **send_image** — deliver an image (base64) to the target as an attachment,
-//!   with an optional caption.
-//! - **find_session** — list sessions across every folder/project so a target
-//!   id (e.g. resolved from a `conversation_id`) can be found.
+//! - **interrupt_session** / **terminate_agent** / **clear_session** /
+//!   **send_message** / **send_image** — mutating actions.
+//! - **find_session** — folder-blind discovery (no approval prompt).
 //!
-//! There is intentionally no boundary: any session can be controlled by id (the
-//! operator grants this by approving the plugin's `session_control` permission).
-//! Discover session ids with this plugin's own **find_session** tool (which is
-//! folder-blind), or the core `list_sessions` / `search_sessions` MCP tools. The
-//! actual actions are performed host-side in
-//! Peckboard core's session-control host functions; this plugin declares the
-//! `session_control` permission and shapes the tool I/O.
+//! Same-folder targets run immediately. Cross-folder mutating actions ask the
+//! user (*Approve once* / *Approve always* / *Deny*); Always is remembered for
+//! that controlling session. The Peckboard host enforces the same grants so a
+//! bypass cannot skip the gate.
 //!
 //! ## Plugin interface
 //!
@@ -33,6 +21,7 @@
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_imports))]
 
+mod authorize;
 mod control;
 mod host;
 mod manifest;
@@ -106,8 +95,6 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         Err(reason) => cancel(&reason),
     }
 }
-
-// ── Verdict helpers (mirror core's `Verdict` enum) ────────────────────
 
 fn allow(value: serde_json::Value) -> String {
     serde_json::json!({ "verdict": "allow", "payload": value }).to_string()
