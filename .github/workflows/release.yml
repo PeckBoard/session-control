@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build wasm
+        run: bash build.sh
+
+      - name: Stage asset as session-control.wasm
+        run: |
+          cp target/wasm32-unknown-unknown/release/peckboard_session_control_plugin.wasm \
+            session-control.wasm
+          sha256sum session-control.wasm | tee session-control.wasm.sha256
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            session-control.wasm
+            session-control.wasm.sha256
+          generate_release_notes: true
