@@ -531,10 +531,19 @@ function editorHtml(o) {
     '</div>';
 }
 
-function openEditor(o) {
+async function loadPickers() {
+  PICKERS = await api("GET", BASE + "/pickers");
+}
+async function openEditor(o) {
   editing = o.id || "";
   const ed = document.getElementById("editor");
   ed.style.display = "";
+  ed.innerHTML = '<div class="muted">Loading folders, models, and sessions…</div>';
+  // ALWAYS fetch pickers right before rendering: a slow or failed boot-time
+  // fetch must never leave the dropdowns permanently empty, and any failure
+  // is surfaced instead of swallowed.
+  try { banner(""); await loadPickers(); }
+  catch (e) { banner("Failed to load folder/model/session lists: " + e.message); }
   ed.innerHTML = editorHtml(o);
   document.getElementById("f-cancel").onclick = () => { editing = null; ed.style.display = "none"; };
   document.getElementById("f-save").onclick = async () => {
@@ -604,12 +613,17 @@ async function refresh() {
   } catch (e) { banner(e.message); }
 }
 async function boot() {
-  try { PICKERS = await api("GET", BASE + "/pickers"); } catch (_) {}
+  try { await loadPickers(); }
+  catch (e) { banner("Failed to load folder/model/session lists: " + e.message); }
   await refresh();
   setInterval(refresh, 5000);
+  // Keep pickers fresh; retry fast while they are still empty.
   setInterval(async () => {
-    try { PICKERS = await api("GET", BASE + "/pickers"); } catch (_) {}
+    try { await loadPickers(); } catch (_) {}
   }, 30000);
+  setInterval(async () => {
+    if (!PICKERS.folders.length) { try { await loadPickers(); } catch (_) {} }
+  }, 5000);
 }
 boot();
 </script>
