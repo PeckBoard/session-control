@@ -22,6 +22,9 @@ pub enum HostFn {
     StoreGet,
     StoreList,
     StoreDelete,
+    /// Atomic put-if-absent — the cross-instance lease behind
+    /// `state::with_engine_lock` (0.4.3, needs peckboard ≥ 0.0.189).
+    StorePutIfAbsent,
     // Orchestrator surface (0.4.0): unattended control + pickers.
     OrchestrateSend,
     OrchestrateCreateSession,
@@ -46,11 +49,12 @@ mod imp {
         fn peckboard_send_message(input: String) -> String;
         fn peckboard_caller_scope(input: String) -> String;
         fn peckboard_ask_user(input: String) -> String;
-        fn peckboard_get_answer(input: String) -> String;
         fn peckboard_store_put(input: String) -> String;
         fn peckboard_store_get(input: String) -> String;
         fn peckboard_store_list(input: String) -> String;
         fn peckboard_store_delete(input: String) -> String;
+        fn peckboard_store_put_if_absent(input: String) -> String;
+        fn peckboard_get_answer(input: String) -> String;
         fn peckboard_orchestrate_send(input: String) -> String;
         fn peckboard_orchestrate_create_session(input: String) -> String;
         fn peckboard_orchestrate_set_prompt(input: String) -> String;
@@ -81,6 +85,7 @@ mod imp {
                 HostFn::StoreGet => peckboard_store_get(s),
                 HostFn::StoreList => peckboard_store_list(s),
                 HostFn::StoreDelete => peckboard_store_delete(s),
+                HostFn::StorePutIfAbsent => peckboard_store_put_if_absent(s),
                 HostFn::OrchestrateSend => peckboard_orchestrate_send(s),
                 HostFn::OrchestrateCreateSession => peckboard_orchestrate_create_session(s),
                 HostFn::OrchestrateSetPrompt => peckboard_orchestrate_set_prompt(s),

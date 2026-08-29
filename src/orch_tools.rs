@@ -82,61 +82,65 @@ pub fn create_session_tool(args: Value) -> Result<Value, String> {
     let hat = opt_str(&args, "hat");
     let responsibilities = opt_str(&args, "responsibilities").unwrap_or_default();
 
-    let mut orch = caller_orchestrator()?;
-    if let Some(o) = &orch
-        && o.stats.sessions_created >= o.caps.max_sessions_created
-    {
-        return Err(format!(
-            "session cap reached ({} of max_sessions_created={}) — raise the cap on the \
-             Orchestrators page if more are truly needed",
-            o.stats.sessions_created, o.caps.max_sessions_created
-        ));
-    }
-
-    let system_prompt = hat.as_ref().map(|h| hat_prompt(h, &responsibilities));
-    let created = call_host(
-        HostFn::CreateSession,
-        &json!({ "name": name, "model": model, "system_prompt": system_prompt }),
-    )?;
-    let sid = created
-        .get("session")
-        .and_then(|s| s.get("id"))
-        .and_then(|v| v.as_str())
-        .ok_or("create_session returned no session id")?
-        .to_string();
-
-    if let Some(o) = orch.as_mut() {
-        let ts = now();
-        o.stats.sessions_created += 1;
-        o.stats.actions += 1;
-        if o.watch.auto_watch_created {
-            o.created_sessions.push(sid.clone());
+    // The whole check→create→record cycle holds the engine lease: the cap
+    // check and the counter bump must see each other across instances.
+    state::try_with_engine_lock(|| {
+        let mut orch = caller_orchestrator()?;
+        if let Some(o) = &orch
+            && o.stats.sessions_created >= o.caps.max_sessions_created
+        {
+            return Err(format!(
+                "session cap reached ({} of max_sessions_created={}) — raise the cap on the \
+                 Orchestrators page if more are truly needed",
+                o.stats.sessions_created, o.caps.max_sessions_created
+            ));
         }
-        if let Some(h) = &hat {
-            o.hats.insert(
-                sid.clone(),
-                HatAssignment {
-                    hat: h.clone(),
-                    responsibilities: responsibilities.clone(),
-                    assigned_at: ts.clone(),
-                },
+
+        let system_prompt = hat.as_ref().map(|h| hat_prompt(h, &responsibilities));
+        let created = call_host(
+            HostFn::CreateSession,
+            &json!({ "name": name, "model": model, "system_prompt": system_prompt }),
+        )?;
+        let sid = created
+            .get("session")
+            .and_then(|s| s.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or("create_session returned no session id")?
+            .to_string();
+
+        if let Some(o) = orch.as_mut() {
+            let ts = now();
+            o.stats.sessions_created += 1;
+            o.stats.actions += 1;
+            if o.watch.auto_watch_created {
+                o.created_sessions.push(sid.clone());
+            }
+            if let Some(h) = &hat {
+                o.hats.insert(
+                    sid.clone(),
+                    HatAssignment {
+                        hat: h.clone(),
+                        responsibilities: responsibilities.clone(),
+                        assigned_at: ts.clone(),
+                    },
+                );
+            }
+            o.push_log(
+                &ts,
+                "created_session",
+                format!(
+                    "created session \"{name}\" ({sid}){}",
+                    hat.as_ref()
+                        .map(|h| format!(" wearing hat \"{h}\""))
+                        .unwrap_or_default()
+                ),
             );
+            state::save_orchestrator(o)?;
         }
-        o.push_log(
-            &ts,
-            "created_session",
-            format!(
-                "created session \"{name}\" ({sid}){}",
-                hat.as_ref()
-                    .map(|h| format!(" wearing hat \"{h}\""))
-                    .unwrap_or_default()
-            ),
-        );
-        state::save_orchestrator(o)?;
-    }
-    Ok(json!({ "ok": true, "session_id": sid, "watched": orch.is_some() }))
+        Ok(json!({ "ok": true, "session_id": sid, "watched": orch.is_some() }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
-
 /// `assign_hat { session_id, hat, responsibilities }` — write the hat as the
 /// target session's system prompt (takes effect on its next turn).
 pub fn assign_hat_tool(args: Value) -> Result<Value, String> {
@@ -152,55 +156,61 @@ pub fn assign_hat_tool(args: Value) -> Result<Value, String> {
         }),
     )?;
 
-    if let Some(mut o) = caller_orchestrator()? {
-        let ts = now();
-        o.stats.actions += 1;
-        o.hats.insert(
-            session_id.clone(),
-            HatAssignment {
-                hat: hat.clone(),
-                responsibilities,
-                assigned_at: ts.clone(),
-            },
-        );
-        o.push_log(
-            &ts,
-            "hat_assigned",
-            format!("hat \"{hat}\" → session {session_id}"),
-        );
-        state::save_orchestrator(&o)?;
-    }
-    Ok(json!({ "ok": true, "session_id": session_id, "hat": hat }))
+    state::try_with_engine_lock(|| {
+        if let Some(mut o) = caller_orchestrator()? {
+            let ts = now();
+            o.stats.actions += 1;
+            o.hats.insert(
+                session_id.clone(),
+                HatAssignment {
+                    hat: hat.clone(),
+                    responsibilities: responsibilities.clone(),
+                    assigned_at: ts.clone(),
+                },
+            );
+            o.push_log(
+                &ts,
+                "hat_assigned",
+                format!("hat \"{hat}\" → session {session_id}"),
+            );
+            state::save_orchestrator(&o)?;
+        }
+        Ok(json!({ "ok": true, "session_id": session_id, "hat": hat }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// `watch_session { session_id }` / `unwatch_session { session_id }`.
 pub fn watch_session_tool(args: Value, watch: bool) -> Result<Value, String> {
     let session_id = require_str(&args, "session_id")?;
-    let mut o = require_caller_orchestrator()?;
-    let ts = now();
-    if watch {
-        if !o.watch.sessions.contains(&session_id) {
-            o.watch.sessions.push(session_id.clone());
-        }
-    } else {
-        o.watch.sessions.retain(|s| s != &session_id);
-        o.created_sessions.retain(|s| s != &session_id);
-    }
-    o.stats.actions += 1;
-    o.push_log(
-        &ts,
-        "watch_changed",
-        format!(
-            "{} {session_id}",
-            if watch {
-                "now watching"
-            } else {
-                "stopped watching"
+    state::try_with_engine_lock(|| {
+        let mut o = require_caller_orchestrator()?;
+        let ts = now();
+        if watch {
+            if !o.watch.sessions.contains(&session_id) {
+                o.watch.sessions.push(session_id.clone());
             }
-        ),
-    );
-    state::save_orchestrator(&o)?;
-    Ok(json!({ "ok": true, "watching": watch, "session_id": session_id }))
+        } else {
+            o.watch.sessions.retain(|s| s != &session_id);
+            o.created_sessions.retain(|s| s != &session_id);
+        }
+        o.stats.actions += 1;
+        o.push_log(
+            &ts,
+            "watch_changed",
+            format!(
+                "{} {session_id}",
+                if watch {
+                    "now watching"
+                } else {
+                    "stopped watching"
+                }
+            ),
+        );
+        state::save_orchestrator(&o)?;
+        Ok(json!({ "ok": true, "watching": watch, "session_id": session_id }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// `list_managed_sessions {}` — watched + created sessions with hats and
@@ -270,65 +280,75 @@ pub fn update_goal_status_tool(args: Value) -> Result<Value, String> {
         }
     };
 
-    let mut o = require_caller_orchestrator()?;
-    let ts = now();
-    o.goal_status.state = goal_state.clone();
-    o.goal_status.note = note.clone();
-    o.goal_status.percent = percent;
-    o.goal_status.updated_at = ts.clone();
-    o.goal_status.eta = Some(state::Eta {
-        minutes_remaining: eta_minutes,
-        projected_at: state::add_minutes(&ts, eta_minutes as i64),
-        updated_at: ts.clone(),
-    });
-    engine::push_eta_history(&mut o, &ts, eta_minutes);
-    o.stats.actions += 1;
-    o.push_log(
-        &ts,
-        "goal_update",
-        format!(
-            "state={goal_state}{} eta={eta_minutes}min{}",
-            percent.map(|p| format!(" {p}%")).unwrap_or_default(),
-            if note.is_empty() {
-                String::new()
-            } else {
-                format!(" — {note}")
-            }
-        ),
-    );
-    state::save_orchestrator(&o)?;
-    Ok(json!({ "ok": true, "state": goal_state, "eta_minutes": eta_minutes }))
+    state::try_with_engine_lock(|| {
+        let mut o = require_caller_orchestrator()?;
+        let ts = now();
+        o.goal_status.state = goal_state.clone();
+        o.goal_status.note = note.clone();
+        o.goal_status.percent = percent;
+        o.goal_status.updated_at = ts.clone();
+        o.goal_status.eta = Some(state::Eta {
+            minutes_remaining: eta_minutes,
+            projected_at: state::add_minutes(&ts, eta_minutes as i64),
+            updated_at: ts.clone(),
+        });
+        engine::push_eta_history(&mut o, &ts, eta_minutes);
+        o.stats.actions += 1;
+        o.push_log(
+            &ts,
+            "goal_update",
+            format!(
+                "state={goal_state}{} eta={eta_minutes}min{}",
+                percent.map(|p| format!(" {p}%")).unwrap_or_default(),
+                if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {note}")
+                }
+            ),
+        );
+        state::save_orchestrator(&o)?;
+        Ok(json!({ "ok": true, "state": goal_state, "eta_minutes": eta_minutes }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// `orchestrator_report { summary }` — one-line activity entry for the page.
 pub fn orchestrator_report_tool(args: Value) -> Result<Value, String> {
     let summary = require_str(&args, "summary")?;
-    let mut o = require_caller_orchestrator()?;
-    let ts = now();
-    o.stats.actions += 1;
-    o.push_log(&ts, "report", summary);
-    state::save_orchestrator(&o)?;
-    Ok(json!({ "ok": true }))
+    state::try_with_engine_lock(|| {
+        let mut o = require_caller_orchestrator()?;
+        let ts = now();
+        o.stats.actions += 1;
+        o.push_log(&ts, "report", summary.clone());
+        state::save_orchestrator(&o)?;
+        Ok(json!({ "ok": true }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// Attribute a successful control-tool call (`send_message`, `interrupt_…`,
 /// …) to the calling brain's action count + feed. Best-effort — never fails
-/// the tool call it decorates.
+/// the tool call it decorates, and a contended lease just drops the
+/// attribution.
 pub fn attribute_action(tool: &str, target_session: Option<&str>) {
-    let Ok(Some(mut o)) = caller_orchestrator() else {
-        return;
-    };
-    let ts = now();
-    o.stats.actions += 1;
-    o.push_log(
-        &ts,
-        "tool_call",
-        match target_session {
-            Some(t) => format!("{tool} → {t}"),
-            None => tool.to_string(),
-        },
-    );
-    let _ = state::save_orchestrator(&o);
+    let _ = state::try_with_engine_lock(|| {
+        let Some(mut o) = caller_orchestrator()? else {
+            return Ok(());
+        };
+        let ts = now();
+        o.stats.actions += 1;
+        o.push_log(
+            &ts,
+            "tool_call",
+            match target_session {
+                Some(t) => format!("{tool} → {t}"),
+                None => tool.to_string(),
+            },
+        );
+        let _ = state::save_orchestrator(&o);
+        Ok(())
+    });
 }
 
 #[cfg(test)]

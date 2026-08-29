@@ -15,6 +15,11 @@ pub fn manifest_json() -> String {
         "version": env!("CARGO_PKG_VERSION"),
         "repository": env!("CARGO_PKG_REPOSITORY"),
 
+        // Up to 4 calls run in parallel on separate wasm instances
+        // (peckboard ≥ 0.0.189; older cores ignore this and serialize).
+        // Safe because every orchestrator-document read→modify→write holds
+        // the cross-instance engine lease — see `state::try_with_engine_lock`.
+        "concurrency": 4,
         "hooks": [
             "mcp.tool.invoke",
             // Orchestrator engine: the ~30s scheduler tick, watched sessions

@@ -53,7 +53,9 @@ impl Trigger {
 
 // ── Hook entry points ─────────────────────────────────────────────────
 
-/// `timer.tick`: store the clock, then walk every orchestrator once.
+/// `timer.tick`: store the clock, then walk every orchestrator once. The
+/// walk runs under the cross-instance engine lease — contended means another
+/// instance is already mid-mutation, and the next tick (~30s) retries.
 pub fn on_timer_tick(payload: Value) -> Result<Value, String> {
     let now = payload
         .get("now")
@@ -64,41 +66,47 @@ pub fn on_timer_tick(payload: Value) -> Result<Value, String> {
     if state::global_paused() {
         return Ok(json!({ "ok": true, "paused": true }));
     }
-    let mut fired = 0u32;
-    for mut o in state::list_orchestrators()? {
-        if !o.enabled || o.paused {
-            continue;
-        }
-        let mut changed = false;
+    let walked = state::try_with_engine_lock(|| {
+        let mut fired = 0u32;
+        for mut o in state::list_orchestrators()? {
+            if !o.enabled || o.paused {
+                continue;
+            }
+            let mut changed = false;
 
-        // Pending flush first: coalesced triggers deliver as soon as the
-        // brain is idle again, ahead of new schedule/watchdog fires.
-        if !o.pending_triggers.is_empty() && brain_is_idle(&o, &now) {
-            let pending = std::mem::take(&mut o.pending_triggers);
-            let mut t = Trigger::simple("coalesced");
-            t.pending = pending;
-            fired += u32::from(fire(&mut o, t, &now));
-            changed = true;
-        } else if schedule_due(&o, &now) {
-            let t = Trigger::simple("schedule");
-            // Advance the slot even when the fire is skipped by a guard —
-            // a blocked slot shouldn't burst later.
-            o.stats.next_due_at = o
-                .schedule
-                .every_minutes
-                .map(|m| state::add_minutes(&now, m as i64));
-            fired += u32::from(fire(&mut o, t, &now));
-            changed = true;
-        } else if watchdog_due(&o, &now) {
-            fired += u32::from(fire(&mut o, Trigger::simple("watchdog"), &now));
-            changed = true;
-        }
+            // Pending flush first: coalesced triggers deliver as soon as the
+            // brain is idle again, ahead of new schedule/watchdog fires.
+            if !o.pending_triggers.is_empty() && brain_is_idle(&o, &now) {
+                let pending = std::mem::take(&mut o.pending_triggers);
+                let mut t = Trigger::simple("coalesced");
+                t.pending = pending;
+                fired += u32::from(fire(&mut o, t, &now));
+                changed = true;
+            } else if schedule_due(&o, &now) {
+                let t = Trigger::simple("schedule");
+                // Advance the slot even when the fire is skipped by a guard —
+                // a blocked slot shouldn't burst later.
+                o.stats.next_due_at = o
+                    .schedule
+                    .every_minutes
+                    .map(|m| state::add_minutes(&now, m as i64));
+                fired += u32::from(fire(&mut o, t, &now));
+                changed = true;
+            } else if watchdog_due(&o, &now) {
+                fired += u32::from(fire(&mut o, Trigger::simple("watchdog"), &now));
+                changed = true;
+            }
 
-        if changed {
-            state::save_orchestrator(&o)?;
+            if changed {
+                state::save_orchestrator(&o)?;
+            }
         }
+        Ok(fired)
+    })?;
+    match walked {
+        Some(fired) => Ok(json!({ "ok": true, "fired": fired })),
+        None => Ok(json!({ "ok": true, "skipped": "busy" })),
     }
-    Ok(json!({ "ok": true, "fired": fired }))
 }
 
 /// `session.agent.ended`: clear the busy mark, flush the brain's pending
@@ -133,42 +141,48 @@ pub fn on_agent_ended(payload: Value) -> Result<Value, String> {
     // orchestrator actually watches folders.
     let mut ended_folder: Option<Option<String>> = None;
 
-    for mut o in state::list_orchestrators()? {
-        if !o.enabled || o.paused {
-            continue;
-        }
-        let is_brain = o.session_id.as_deref() == Some(session_id.as_str());
-        if is_brain {
-            // Brain finished a turn → deliver anything that queued up.
-            if !o.pending_triggers.is_empty() {
-                let pending = std::mem::take(&mut o.pending_triggers);
-                let mut t = Trigger::simple("coalesced");
-                t.pending = pending;
-                fire(&mut o, t, &now);
+    // Contended lease → skip: the busy mark is already cleared, pending
+    // triggers flush on the next tick, and a missed watched-idle fire is
+    // covered by the watchdog. Never blocks the hook.
+    let walked = state::try_with_engine_lock(|| {
+        for mut o in state::list_orchestrators()? {
+            if !o.enabled || o.paused {
+                continue;
+            }
+            let is_brain = o.session_id.as_deref() == Some(session_id.as_str());
+            if is_brain {
+                // Brain finished a turn → deliver anything that queued up.
+                if !o.pending_triggers.is_empty() {
+                    let pending = std::mem::take(&mut o.pending_triggers);
+                    let mut t = Trigger::simple("coalesced");
+                    t.pending = pending;
+                    fire(&mut o, t, &now);
+                    state::save_orchestrator(&o)?;
+                }
+                continue;
+            }
+            let watched = o.watches_session(&session_id) || {
+                if o.watch.folders.is_empty() {
+                    false
+                } else {
+                    let folder = ended_folder
+                        .get_or_insert_with(|| session_folder(&session_id))
+                        .clone();
+                    folder.map(|f| o.watches_folder(&f)).unwrap_or(false)
+                }
+            };
+            if watched {
+                fire(
+                    &mut o,
+                    Trigger::session_idle(&session_id, &session_name, &outcome),
+                    &now,
+                );
                 state::save_orchestrator(&o)?;
             }
-            continue;
         }
-        let watched = o.watches_session(&session_id) || {
-            if o.watch.folders.is_empty() {
-                false
-            } else {
-                let folder = ended_folder
-                    .get_or_insert_with(|| session_folder(&session_id))
-                    .clone();
-                folder.map(|f| o.watches_folder(&f)).unwrap_or(false)
-            }
-        };
-        if watched {
-            fire(
-                &mut o,
-                Trigger::session_idle(&session_id, &session_name, &outcome),
-                &now,
-            );
-            state::save_orchestrator(&o)?;
-        }
-    }
-    Ok(json!({ "ok": true }))
+        Ok(())
+    })?;
+    Ok(json!({ "ok": true, "skipped": walked.is_none().then_some("busy") }))
 }
 
 /// `session.message.before` (observed, never rewritten): a user turn is
@@ -189,10 +203,13 @@ pub fn on_message_before(payload: Value) -> Result<(), String> {
 /// "Run now": fire regardless of schedule; cooldown and caps still apply.
 pub fn run_now(id: &str) -> Result<Value, String> {
     let now = state::clock().ok_or("no engine clock yet — wait for the first timer tick")?;
-    let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
-    let sent = fire(&mut o, Trigger::simple("manual"), &now);
-    state::save_orchestrator(&o)?;
-    Ok(json!({ "ok": true, "sent": sent }))
+    state::try_with_engine_lock(|| {
+        let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
+        let sent = fire(&mut o, Trigger::simple("manual"), &now);
+        state::save_orchestrator(&o)?;
+        Ok(json!({ "ok": true, "sent": sent }))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// "Test fire": render the prompt with current context; deliver nothing.

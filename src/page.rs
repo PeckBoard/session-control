@@ -196,53 +196,71 @@ fn apply_fields(o: &mut Orchestrator, body: &Value) -> Result<(), String> {
 
 fn create_route(body: &Value) -> Result<Value, String> {
     let now = state::clock().unwrap_or_else(|| "1970-01-01T00:00:00Z".into());
-    let mut o: Orchestrator = serde_json::from_value(json!({
-        "id": new_id(),
-        "name": "",
-        "folder_id": "",
-        "created_at": now,
-    }))
-    .map_err(|e| e.to_string())?;
-    apply_fields(&mut o, body)?;
-    if o.name.is_empty() {
-        return Err("name is required".into());
-    }
-    if o.folder_id.is_empty() {
-        return Err("folder_id is required".into());
-    }
-    o.push_log(&now, "report", "orchestrator created");
-    state::save_orchestrator(&o)?;
-    Ok(ok_json(json!({ "ok": true, "id": o.id })))
+    state::try_with_engine_lock(|| {
+        // Under the lease the existence check makes the id race-free even
+        // when another instance created one in the same clock second.
+        let mut id = new_id();
+        while state::load_orchestrator(&id)?.is_some() {
+            id = new_id();
+        }
+        let mut o: Orchestrator = serde_json::from_value(json!({
+            "id": id,
+            "name": "",
+            "folder_id": "",
+            "created_at": now,
+        }))
+        .map_err(|e| e.to_string())?;
+        apply_fields(&mut o, body)?;
+        if o.name.is_empty() {
+            return Err("name is required".into());
+        }
+        if o.folder_id.is_empty() {
+            return Err("folder_id is required".into());
+        }
+        o.push_log(&now, "report", "orchestrator created");
+        state::save_orchestrator(&o)?;
+        Ok(ok_json(json!({ "ok": true, "id": o.id })))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 fn update_route(id: &str, body: &Value) -> Result<Value, String> {
-    let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
-    apply_fields(&mut o, body)?;
-    state::save_orchestrator(&o)?;
-    // Keep an existing brain's standing prompt in sync with edited
-    // goal/standards/name — takes effect on its next turn. Best-effort.
-    if let Some(sid) = &o.session_id {
-        let _ = call_host(
-            HostFn::OrchestrateSetPrompt,
-            &json!({ "session_id": sid, "system_prompt": engine::standing_prompt(&o) }),
-        );
-    }
-    Ok(ok_json(json!({ "ok": true })))
+    state::try_with_engine_lock(|| {
+        let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
+        apply_fields(&mut o, body)?;
+        state::save_orchestrator(&o)?;
+        // Keep an existing brain's standing prompt in sync with edited
+        // goal/standards/name — takes effect on its next turn. Best-effort.
+        if let Some(sid) = &o.session_id {
+            let _ = call_host(
+                HostFn::OrchestrateSetPrompt,
+                &json!({ "session_id": sid, "system_prompt": engine::standing_prompt(&o) }),
+            );
+        }
+        Ok(ok_json(json!({ "ok": true })))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 fn delete_route(id: &str) -> Result<Value, String> {
-    state::store_delete(state::ORCH_COLLECTION, id)?;
-    Ok(ok_json(json!({ "ok": true })))
+    state::try_with_engine_lock(|| {
+        state::store_delete(state::ORCH_COLLECTION, id)?;
+        Ok(ok_json(json!({ "ok": true })))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 fn pause_route(id: &str, body: &Value) -> Result<Value, String> {
-    let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
-    o.paused = body
-        .get("paused")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(!o.paused);
-    state::save_orchestrator(&o)?;
-    Ok(ok_json(json!({ "ok": true, "paused": o.paused })))
+    state::try_with_engine_lock(|| {
+        let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
+        o.paused = body
+            .get("paused")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(!o.paused);
+        state::save_orchestrator(&o)?;
+        Ok(ok_json(json!({ "ok": true, "paused": o.paused })))
+    })?
+    .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
 /// Dropdown data: sessions (folder-blind), folders, models. Models come from

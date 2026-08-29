@@ -331,6 +331,60 @@ pub fn store_delete(collection: &str, key: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ── Cross-instance engine lease ───────────────────────────────────────
+
+pub const LOCK_COLLECTION: &str = "locks";
+const ENGINE_LOCK_KEY: &str = "engine";
+/// A trapped or timed-out holder leaks the lease for at most this long;
+/// well above the plugin's call budget, so a live holder is never stolen.
+const ENGINE_LOCK_TTL_SECS: u64 = 60;
+
+/// One global mutex around every orchestrator-document read→modify→write.
+/// With manifest `concurrency` > 1 the host runs this plugin's calls on
+/// several wasm instances at once; guest memory can't lock across them, so
+/// mutual exclusion rides on the host store's atomic put-if-absent
+/// (peckboard ≥ 0.0.189). Every RMW cycle — engine ticks, page mutations,
+/// brain tools — goes through here; reads stay lock-free.
+///
+/// `Ok(None)` = contended: the caller skips (engine — the next tick
+/// retries) or reports "busy" (page routes, tools). `f` must LOAD the
+/// documents it mutates inside the closure — state read before the lease
+/// was acquired may already be stale.
+#[cfg(target_arch = "wasm32")]
+pub fn try_with_engine_lock<T>(
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    let acquired = call_host(
+        HostFn::StorePutIfAbsent,
+        &json!({
+            "collection": LOCK_COLLECTION,
+            "key": ENGINE_LOCK_KEY,
+            "data": { "at": clock().unwrap_or_default() },
+            "ttl_secs": ENGINE_LOCK_TTL_SECS,
+        }),
+    )?
+    .get("acquired")
+    .and_then(|v| v.as_bool())
+    .unwrap_or(false);
+    if !acquired {
+        return Ok(None);
+    }
+    let out = f();
+    let _ = store_delete(LOCK_COLLECTION, ENGINE_LOCK_KEY);
+    out.map(Some)
+}
+
+/// Host builds (unit tests) are single-threaded pure logic — no lease.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn try_with_engine_lock<T>(
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    f().map(Some)
+}
+
+/// The user-facing form of lease contention on interactive surfaces.
+pub const BUSY_MSG: &str = "another orchestrator update is in flight — try again in a moment";
+
 pub fn load_orchestrator(id: &str) -> Result<Option<Orchestrator>, String> {
     Ok(
         store_get(ORCH_COLLECTION, id)?
