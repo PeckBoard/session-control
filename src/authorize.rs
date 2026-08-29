@@ -61,11 +61,9 @@ pub fn ensure_cross_folder_allowed(target_id: &str, action_label: &str) -> Resul
     }
 
     let Some(caller_id) = caller_session else {
-        return Err(
-            "cross-folder session control requires a caller session \
+        return Err("cross-folder session control requires a caller session \
              (invoke from a session tool call)"
-                .into(),
-        );
+            .into());
     };
 
     // Persisted Always for this caller session.
@@ -134,11 +132,7 @@ pub fn ensure_cross_folder_allowed(target_id: &str, action_label: &str) -> Resul
                 ));
             }
             if answer.starts_with(APPROVE_ALWAYS) {
-                store_put(
-                    ALWAYS_COLLECTION,
-                    &caller_id,
-                    json!({ "approved": true }),
-                )?;
+                store_put(ALWAYS_COLLECTION, &caller_id, json!({ "approved": true }))?;
                 return Ok(Gate::Ready);
             }
             if answer.starts_with(APPROVE_ONCE) {

@@ -20,7 +20,16 @@ pub enum HostFn {
     GetAnswer,
     StorePut,
     StoreGet,
+    StoreList,
     StoreDelete,
+    // Orchestrator surface (0.4.0): unattended control + pickers.
+    OrchestrateSend,
+    OrchestrateCreateSession,
+    OrchestrateSetPrompt,
+    OrchestrateSessionState,
+    CreateSession,
+    ListFolders,
+    ListModels,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -40,7 +49,15 @@ mod imp {
         fn peckboard_get_answer(input: String) -> String;
         fn peckboard_store_put(input: String) -> String;
         fn peckboard_store_get(input: String) -> String;
+        fn peckboard_store_list(input: String) -> String;
         fn peckboard_store_delete(input: String) -> String;
+        fn peckboard_orchestrate_send(input: String) -> String;
+        fn peckboard_orchestrate_create_session(input: String) -> String;
+        fn peckboard_orchestrate_set_prompt(input: String) -> String;
+        fn peckboard_orchestrate_session_state(input: String) -> String;
+        fn peckboard_create_session(input: String) -> String;
+        fn peckboard_list_folders(input: String) -> String;
+        fn peckboard_list_models(input: String) -> String;
     }
 
     /// Invoke a host function with a JSON value, parse its JSON reply, and
@@ -62,7 +79,15 @@ mod imp {
                 HostFn::GetAnswer => peckboard_get_answer(s),
                 HostFn::StorePut => peckboard_store_put(s),
                 HostFn::StoreGet => peckboard_store_get(s),
+                HostFn::StoreList => peckboard_store_list(s),
                 HostFn::StoreDelete => peckboard_store_delete(s),
+                HostFn::OrchestrateSend => peckboard_orchestrate_send(s),
+                HostFn::OrchestrateCreateSession => peckboard_orchestrate_create_session(s),
+                HostFn::OrchestrateSetPrompt => peckboard_orchestrate_set_prompt(s),
+                HostFn::OrchestrateSessionState => peckboard_orchestrate_session_state(s),
+                HostFn::CreateSession => peckboard_create_session(s),
+                HostFn::ListFolders => peckboard_list_folders(s),
+                HostFn::ListModels => peckboard_list_models(s),
             }
         }
         .map_err(|e| e.to_string())?;
