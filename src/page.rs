@@ -383,6 +383,28 @@ const BASE = "/api/plugin-ui/session-control";
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
   (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+// Prompt presets: picking one fills Goal + Trigger prompt; both stay editable.
+const PRESETS = [
+  { id: "project-def", label: "Project definition → cards, then implement",
+    goal: "Implement every feature in the project definition.\n" +
+      "1. Read PROJECT_DEFINITION.md at the root of this folder's repository (read_file). If it does not exist, call update_goal_status with state=blocked and a note saying so.\n" +
+      "2. Find the project for this folder (list_projects) or create one (create_project).\n" +
+      "3. Create one card per feature/requirement in the definition (create_card) — check list_cards first and never duplicate an existing card. Give each card a clear title and a description with acceptance criteria taken from the definition.\n" +
+      "4. Drive every card to done: create a session per work area with a fitting hat, review results when sessions go idle, and move_card_to_done only when the work meets the standards.\n" +
+      "Done when every feature in PROJECT_DEFINITION.md has a card and every card is done.",
+    prompt: "Trigger: {{trigger}}. Compare PROJECT_DEFINITION.md against the project's cards: features missing a card, cards in flight, cards finished. Act on the next thing that needs you, then report via orchestrator_report + update_goal_status." },
+  { id: "backlog", label: "Drive the card backlog to done",
+    goal: "Drive this folder's existing card backlog to completion.\n" +
+      "Enumerate open cards with list_cards, order them by priority and dependencies (list_card_dependencies), delegate each to a session you create with a fitting hat, verify results against the standards, and move finished cards with move_card_to_done.\n" +
+      "Done when no open cards remain.",
+    prompt: "" },
+  { id: "green", label: "Keep the build green (standing watch)",
+    goal: "Keep this repository healthy.\n" +
+      "On every engagement, have a session run the project's verification (build, lint, tests — use its verify script when it has one), delegate fixes for anything that fails, and re-verify.\n" +
+      "This is a standing watch: report status with update_goal_status but never set state=done.",
+    prompt: "" },
+];
+
 let DATA = { orchestrators: [], global_paused: false, clock: "" };
 let PICKERS = { sessions: [], folders: [], models: [] };
 let editing = null; // null = closed, "" = new, "<id>" = edit
@@ -486,6 +508,10 @@ function editorHtml(o) {
   const watchSet = new Set((o.watch && o.watch.sessions) || []);
   return '<h2 style="margin:0 0 4px;font-size:15px">' + (o.id ? "Edit" : "New") + ' orchestrator</h2>' +
     '<label>Name</label><input type="text" id="f-name" data-testid="orch-name" value="' + esc(o.name || "") + '">' +
+    '<label>Preset — fills Goal + Trigger prompt below (both stay editable)</label>' +
+    '<select id="f-preset" data-testid="orch-preset"><option value="">— none —</option>' +
+      PRESETS.map((p) => '<option value="' + esc(p.id) + '">' + esc(p.label) + '</option>').join("") +
+    '</select>' +
     '<label>Goal — the requirements to drive to completion</label>' +
     '<textarea id="f-goal" data-testid="orch-goal">' + esc(o.goal || "") + '</textarea>' +
     '<label>Trigger prompt (optional; vars: {{trigger}} {{goal}} {{eta}} {{pending}} {{standards}} {{session_name}} {{outcome}} {{watched_busy_count}})</label>' +
@@ -545,6 +571,12 @@ async function openEditor(o) {
   try { banner(""); await loadPickers(); }
   catch (e) { banner("Failed to load folder/model/session lists: " + e.message); }
   ed.innerHTML = editorHtml(o);
+  document.getElementById("f-preset").onchange = (ev) => {
+    const p = PRESETS.find((x) => x.id === ev.target.value);
+    if (!p) return;
+    document.getElementById("f-goal").value = p.goal;
+    document.getElementById("f-prompt").value = p.prompt;
+  };
   document.getElementById("f-cancel").onclick = () => { editing = null; ed.style.display = "none"; };
   document.getElementById("f-save").onclick = async () => {
     const num = (id) => { const v = document.getElementById(id).value; return v === "" ? null : Number(v); };
@@ -664,6 +696,8 @@ mod tests {
     fn page_html_has_bridge_and_testids() {
         assert!(PAGE_HTML.contains("plugin-ui-fetch"));
         assert!(PAGE_HTML.contains("plugin-ui-fetch-result"));
+        assert!(PAGE_HTML.contains("data-testid=\"orch-preset\""));
+        assert!(PAGE_HTML.contains("PROJECT_DEFINITION.md"));
         assert!(PAGE_HTML.contains("data-testid=\"orch-card\""));
         assert!(PAGE_HTML.contains("data-testid=\"orch-actions\""));
         assert!(PAGE_HTML.contains("data-testid=\"orch-eta\""));
