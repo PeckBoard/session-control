@@ -1,6 +1,6 @@
 [package]
 name = "peckboard-session-control-plugin"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 description = "Control and orchestrate Peckboard sessions: interrupt, terminate, clear, send messages/images, plus goal-driven orchestrators that schedule, watch, and direct other sessions autonomously."
 repository = "https://github.com/PeckBoard/session-control"
