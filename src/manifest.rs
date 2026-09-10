@@ -104,6 +104,20 @@ pub fn manifest_json() -> String {
                 }
             },
             {
+                "name": "read_session",
+                "title": "Read a session's event tail",
+                "description": "Read another session's recent events — user messages, agent text, tool calls and their errors — so you can see what it actually did, including sessions in OTHER folders that read_worker_session reports as not found. Same-folder immediate; cross-folder asks Approve once / Always / Deny and returns status awaiting_approval until answered, then re-call with the same session_id. You can only read sessions your own user may see (your chats, board-attached worker/expert sessions, or anything if you are an admin). Discover ids with find_session.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string", "description": "The session to read." },
+                        "last_n": { "type": "integer", "description": "Events to return from the tail (default 50, max 200)." }
+                    },
+                    "required": ["session_id"],
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "find_session",
                 "title": "Find sessions across all folders",
                 "description": "List sessions anywhere in this Peckboard instance -- every folder and project -- so you can resolve a target for the other session-control tools. Discovery does not require approval; acting on a cross-folder match does. Returns session_id, name, folder_id, project_id, conversation_id, model, worker/expert flags, card_id, and last_activity, newest first. Optional 'query' filters by case-insensitive substring.",
@@ -297,6 +311,7 @@ mod tests {
             "orchestrator_report",
             "interrupt_session",
             "find_session",
+            "read_session",
         ] {
             assert!(tools.contains(&t), "missing tool {t}");
         }

@@ -132,6 +132,7 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         "clear_session" => control::clear_session_tool(args),
         "send_message" => control::send_message_tool(args),
         "send_image" => control::send_image_tool(args),
+        "read_session" => control::read_session_tool(args),
         "find_session" => control::find_session_tool(args),
         "create_session" => orch_tools::create_session_tool(args),
         "assign_hat" => orch_tools::assign_hat_tool(args),

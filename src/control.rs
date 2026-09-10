@@ -69,6 +69,21 @@ pub fn send_message_tool(args: Value) -> Result<Value, String> {
     })
 }
 
+/// Read another session's recent event tail. Cross-folder reads go through
+/// the same Approve once / always / deny gate the mutating tools use; the
+/// host re-checks the grant AND that the caller's user may see the target.
+pub fn read_session_tool(args: Value) -> Result<Value, String> {
+    let session_id = require_str(&args, "session_id")?;
+    let last_n = args.get("last_n").and_then(|v| v.as_i64());
+    gated_action(&session_id, "read", || {
+        let mut req = json!({ "session_id": session_id });
+        if let Some(n) = last_n {
+            req["last_n"] = json!(n);
+        }
+        call_host(HostFn::ReadSessionEvents, &req)
+    })
+}
+
 pub fn find_session_tool(args: Value) -> Result<Value, String> {
     // Discovery stays folder-blind — no approval prompt.
     let query = opt_str(&args, "query", "");

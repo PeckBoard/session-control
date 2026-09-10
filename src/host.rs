@@ -14,6 +14,10 @@ pub enum HostFn {
     TerminateAgent,
     ClearSession,
     SendMessage,
+    /// Read another session's event tail (cross-folder gated like the
+    /// mutating actions; needs peckboard core with
+    /// `peckboard_read_session_events`).
+    ReadSessionEvents,
     ListSessions,
     CallerScope,
     AskUser,
@@ -45,6 +49,7 @@ mod imp {
         fn peckboard_interrupt_session(input: String) -> String;
         fn peckboard_terminate_agent(input: String) -> String;
         fn peckboard_clear_session(input: String) -> String;
+        fn peckboard_read_session_events(input: String) -> String;
         fn peckboard_list_all_sessions(input: String) -> String;
         fn peckboard_send_message(input: String) -> String;
         fn peckboard_caller_scope(input: String) -> String;
@@ -76,6 +81,7 @@ mod imp {
                 HostFn::InterruptSession => peckboard_interrupt_session(s),
                 HostFn::TerminateAgent => peckboard_terminate_agent(s),
                 HostFn::ClearSession => peckboard_clear_session(s),
+                HostFn::ReadSessionEvents => peckboard_read_session_events(s),
                 HostFn::SendMessage => peckboard_send_message(s),
                 HostFn::ListSessions => peckboard_list_all_sessions(s),
                 HostFn::CallerScope => peckboard_caller_scope(s),
