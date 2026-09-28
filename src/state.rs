@@ -29,7 +29,7 @@ pub const ETA_HISTORY_CAP: usize = 50;
 /// missed `session.agent.ended` wedging an orchestrator's brain "busy"
 /// forever. Delivery queues host-side anyway, so a wrong "idle" is harmless.
 pub const BUSY_STALE_MINUTES: i64 = 30;
-/// Consecutive delivery failures before an orchestrator disables itself.
+/// Consecutive delivery failures before an orchestrator starts backing off.
 pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 fn default_true() -> bool {
@@ -254,9 +254,13 @@ pub struct Orchestrator {
     pub log: Vec<ActivityEvent>,
     #[serde(default)]
     pub last_rendered_prompt: String,
-    /// Set when backoff auto-disabled the orchestrator; cleared on success.
+    /// Last delivery error; cleared on success.
     #[serde(default)]
     pub error: Option<String>,
+    /// After repeated failures, fires are skipped until this time, then
+    /// retried automatically. Cleared on success.
+    #[serde(default)]
+    pub backoff_until: Option<String>,
     #[serde(default)]
     pub created_at: String,
 }
@@ -351,9 +355,7 @@ const ENGINE_LOCK_TTL_SECS: u64 = 60;
 /// documents it mutates inside the closure — state read before the lease
 /// was acquired may already be stale.
 #[cfg(target_arch = "wasm32")]
-pub fn try_with_engine_lock<T>(
-    f: impl FnOnce() -> Result<T, String>,
-) -> Result<Option<T>, String> {
+pub fn try_with_engine_lock<T>(f: impl FnOnce() -> Result<T, String>) -> Result<Option<T>, String> {
     let acquired = call_host(
         HostFn::StorePutIfAbsent,
         &json!({
@@ -376,9 +378,7 @@ pub fn try_with_engine_lock<T>(
 
 /// Host builds (unit tests) are single-threaded pure logic — no lease.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn try_with_engine_lock<T>(
-    f: impl FnOnce() -> Result<T, String>,
-) -> Result<Option<T>, String> {
+pub fn try_with_engine_lock<T>(f: impl FnOnce() -> Result<T, String>) -> Result<Option<T>, String> {
     f().map(Some)
 }
 

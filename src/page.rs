@@ -137,11 +137,16 @@ fn apply_fields(o: &mut Orchestrator, body: &Value) -> Result<(), String> {
         o.model = v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
     }
     if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        if !v && o.enabled {
+            let now = state::clock().unwrap_or_default();
+            o.push_log(&now, "user_disabled", "disabled from the management page");
+        }
         o.enabled = v;
         if v {
             // Re-enabling clears the backoff state.
             o.consecutive_failures = 0;
             o.error = None;
+            o.backoff_until = None;
         }
     }
     if let Some(v) = body.get("every_minutes") {
@@ -253,10 +258,17 @@ fn delete_route(id: &str) -> Result<Value, String> {
 fn pause_route(id: &str, body: &Value) -> Result<Value, String> {
     state::try_with_engine_lock(|| {
         let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
+        let was_paused = o.paused;
         o.paused = body
             .get("paused")
             .and_then(|v| v.as_bool())
             .unwrap_or(!o.paused);
+        if o.paused && !was_paused {
+            // Marks the pause as the user's, so the legacy auto-pause
+            // heal in the engine leaves it alone.
+            let now = state::clock().unwrap_or_default();
+            o.push_log(&now, "user_paused", "paused from the management page");
+        }
         state::save_orchestrator(&o)?;
         Ok(ok_json(json!({ "ok": true, "paused": o.paused })))
     })?
@@ -450,8 +462,9 @@ function driftArrow(o) {
   return " → holding";
 }
 function stateChip(o) {
-  if (!o.enabled) return ["disabled" + (o.error ? " (backoff)" : ""), "bad"];
+  if (!o.enabled) return ["disabled", "bad"];
   if (o.paused) return ["paused", "warn"];
+  if (o.backoff_until && DATA.clock && o.backoff_until > DATA.clock) return ["retrying after errors", "warn"];
   if (o.goal_status && o.goal_status.state === "done") return ["done", "ok"];
   if (o.brain_busy) return ["brain running", "ok"];
   return ["idle", ""];

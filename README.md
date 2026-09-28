@@ -27,8 +27,10 @@ system prompt), `watch_session` / `unwatch_session`,
 required `eta_minutes` estimate for the whole goal; `done` stops the
 watchdog), and `orchestrator_report` (activity feed entry).
 
-Guards: hourly fire cap (auto-pause), per-orchestrator cooldown,
-busy-coalescing of triggers, consecutive-failure backoff (auto-disable),
+Guards: hourly fire cap (skips fires until the window frees up),
+per-orchestrator cooldown, busy-coalescing of triggers, consecutive-failure
+backoff (timed retry), and a global Pause-all kill switch. The engine never
+pauses or disables an orchestrator on its own. The page shows per-orchestrator action
 and a global Pause-all kill switch. The page shows per-orchestrator action
 counts, fires, pending triggers, goal progress + ETA with drift, the
 activity feed, managed sessions with hats, a dry-run prompt preview, and

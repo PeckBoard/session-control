@@ -9,9 +9,9 @@
 //!
 //! A fire delivers the orchestrator's rendered prompt to its brain session
 //! via the `session_orchestrate` host quartet. Guards, in order: global
-//! pause, per-orchestrator enable/pause, hourly fire cap (auto-pause),
-//! cooldown, brain-busy coalescing, and consecutive-failure backoff
-//! (auto-disable).
+//! pause, per-orchestrator enable/pause (user-only), hourly fire cap (skip),
+//! failure backoff (skip until the retry time), cooldown, and brain-busy
+//! coalescing. The engine never pauses or disables an orchestrator itself.
 
 use serde_json::{Value, json};
 
@@ -69,6 +69,9 @@ pub fn on_timer_tick(payload: Value) -> Result<Value, String> {
     let walked = state::try_with_engine_lock(|| {
         let mut fired = 0u32;
         for mut o in state::list_orchestrators()? {
+            if heal_legacy_auto_stop(&mut o, &now) {
+                state::save_orchestrator(&o)?;
+            }
             if !o.enabled || o.paused {
                 continue;
             }
@@ -282,23 +285,40 @@ fn over_fire_cap(o: &mut Orchestrator, now: &str) -> bool {
 
 /// Deliver one fire. Returns true when a prompt was actually sent. Mutates
 /// `o` (stats, log, pending, error state) — the caller persists it.
+///
+/// No guard here ever pauses or disables the orchestrator: a blocked fire is
+/// simply skipped, and the next scheduled/watchdog tick tries again.
 fn fire(o: &mut Orchestrator, trigger: Trigger, now: &str) -> bool {
+    let manual = trigger.kind == "manual";
+    let queues = trigger.kind == "session_idle" || trigger.kind == "coalesced";
     if over_fire_cap(o, now) {
-        o.paused = true;
-        o.push_log(
-            now,
-            "cap_hit",
-            format!(
-                "{} fires in the last hour reached max_fires_per_hour={} — auto-paused",
-                o.stats.fire_times.len(),
-                o.caps.max_fires_per_hour
-            ),
-        );
+        // Event triggers wait for the window to free up; timer triggers
+        // just skip this run. Log once per blocked stretch, not every tick.
+        let count = o.stats.fire_times.len();
+        let cap = o.caps.max_fires_per_hour;
+        if queues {
+            queue_pending(o, trigger, now);
+        }
+        if o.log.last().map(|e| e.kind.as_str()) != Some("cap_hit") {
+            o.push_log(
+                now,
+                "cap_hit",
+                format!(
+                    "{count} fires in the last hour reached max_fires_per_hour={cap} — skipping until the window frees up"
+                ),
+            );
+        }
+        return false;
+    }
+    if !manual && in_backoff(o, now) {
+        if queues {
+            queue_pending(o, trigger, now);
+        }
         return false;
     }
     if in_cooldown(o, now) {
         // Event triggers queue; timer triggers just wait for the next tick.
-        if trigger.kind == "session_idle" || trigger.kind == "coalesced" {
+        if queues {
             queue_pending(o, trigger, now);
         }
         return false;
@@ -321,6 +341,7 @@ fn fire(o: &mut Orchestrator, trigger: Trigger, now: &str) -> bool {
         Ok(_) => {
             o.consecutive_failures = 0;
             o.error = None;
+            o.backoff_until = None;
             o.stats.fires += 1;
             o.stats.actions += 1;
             o.stats.last_fired_at = Some(now.to_string());
@@ -374,18 +395,21 @@ fn queue_pending(o: &mut Orchestrator, trigger: Trigger, now: &str) {
         o.pending_triggers.drain(..drop);
     }
 }
-
-/// Failure bookkeeping; auto-disables after [`MAX_CONSECUTIVE_FAILURES`].
+/// Failure bookkeeping. After [`MAX_CONSECUTIVE_FAILURES`] the orchestrator
+/// backs off (5 min, doubling, capped at [`MAX_BACKOFF_MINUTES`]) and then
+/// retries on its own — it never disables itself, since nothing would ever
+/// turn it back on.
 fn record_failure(o: &mut Orchestrator, now: &str, err: &str) -> bool {
     o.consecutive_failures += 1;
     o.error = Some(err.to_string());
     if o.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-        o.enabled = false;
+        let minutes = backoff_minutes(o.consecutive_failures);
+        o.backoff_until = Some(state::add_minutes(now, minutes));
         o.push_log(
             now,
             "backoff",
             format!(
-                "{n} consecutive failures — auto-disabled. Last error: {err}",
+                "{n} consecutive failures — retrying in {minutes} min. Last error: {err}",
                 n = o.consecutive_failures
             ),
         );
@@ -393,6 +417,57 @@ fn record_failure(o: &mut Orchestrator, now: &str, err: &str) -> bool {
         o.push_log(now, "error", err.to_string());
     }
     false
+}
+
+const MAX_BACKOFF_MINUTES: i64 = 60;
+
+fn backoff_minutes(failures: u32) -> i64 {
+    let doublings = failures.saturating_sub(MAX_CONSECUTIVE_FAILURES).min(8);
+    (5i64 << doublings).min(MAX_BACKOFF_MINUTES)
+}
+
+fn in_backoff(o: &Orchestrator, now: &str) -> bool {
+    o.backoff_until
+        .as_deref()
+        .and_then(|until| state::seconds_between(now, until))
+        .is_some_and(|s| s > 0)
+}
+
+/// Heal orchestrators an older release stopped on its own — the hourly cap
+/// used to auto-pause and repeated failures used to auto-disable, and
+/// neither ever recovered. Undo that unless the user paused/disabled it
+/// themselves afterwards. Returns true when something changed.
+pub fn heal_legacy_auto_stop(o: &mut Orchestrator, now: &str) -> bool {
+    let last_idx = |pred: &dyn Fn(&state::ActivityEvent) -> bool| o.log.iter().rposition(pred);
+    let mut changed = false;
+    if o.paused {
+        let auto = last_idx(&|e| e.kind == "cap_hit" && e.detail.ends_with("auto-paused"));
+        let user = last_idx(&|e| e.kind == "user_paused");
+        if auto.is_some() && auto > user {
+            o.paused = false;
+            changed = true;
+        }
+    }
+    if !o.enabled {
+        let auto = last_idx(&|e| e.kind == "backoff" && e.detail.contains("auto-disabled"));
+        let user = last_idx(&|e| e.kind == "user_disabled");
+        if auto.is_some() && auto > user {
+            o.enabled = true;
+            o.backoff_until = Some(state::add_minutes(
+                now,
+                backoff_minutes(o.consecutive_failures),
+            ));
+            changed = true;
+        }
+    }
+    if changed {
+        o.push_log(
+            now,
+            "resumed",
+            "undid an automatic pause/disable from an older release",
+        );
+    }
+    changed
 }
 
 // ── Brain session ─────────────────────────────────────────────────────
@@ -659,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn fire_cap_prunes_and_pauses() {
+    fn fire_cap_prunes_and_detects() {
         let mut o = orch();
         o.caps.max_fires_per_hour = 2;
         o.stats.fire_times = vec![
@@ -716,18 +791,88 @@ mod tests {
         o.standards.custom = "no unwrap()".into();
         assert!(standards_text(&o).contains("no unwrap()"));
     }
-
     #[test]
-    fn record_failure_backs_off_after_three() {
+    fn record_failure_backs_off_but_never_disables() {
         let mut o = orch();
         let now = "2026-08-29T10:00:00Z";
         record_failure(&mut o, now, "boom");
         record_failure(&mut o, now, "boom");
-        assert!(o.enabled);
+        assert!(o.backoff_until.is_none());
         record_failure(&mut o, now, "boom");
-        assert!(!o.enabled);
+        assert!(o.enabled, "failures must never disable");
+        assert_eq!(
+            o.backoff_until.as_deref(),
+            Some("2026-08-29T10:05:00+00:00")
+        );
+        assert!(in_backoff(&o, "2026-08-29T10:04:00Z"));
+        assert!(!in_backoff(&o, "2026-08-29T10:05:00Z"));
         assert_eq!(o.error.as_deref(), Some("boom"));
         assert!(o.log.iter().any(|e| e.kind == "backoff"));
+        // Grows, but caps.
+        for _ in 0..10 {
+            record_failure(&mut o, now, "boom");
+        }
+        assert_eq!(
+            o.backoff_until.as_deref(),
+            Some("2026-08-29T11:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn cap_hit_skips_without_pausing_and_logs_once() {
+        let mut o = orch();
+        o.caps.max_fires_per_hour = 1;
+        o.stats.fire_times = vec!["2026-08-29T09:45:00Z".into()];
+        assert!(!fire(
+            &mut o,
+            Trigger::simple("schedule"),
+            "2026-08-29T10:00:00Z"
+        ));
+        assert!(!fire(
+            &mut o,
+            Trigger::simple("watchdog"),
+            "2026-08-29T10:00:30Z"
+        ));
+        assert!(!o.paused, "cap must never pause");
+        assert!(o.enabled);
+        assert_eq!(o.log.iter().filter(|e| e.kind == "cap_hit").count(), 1);
+        // Event triggers wait in the queue instead of being dropped.
+        fire(
+            &mut o,
+            Trigger::session_idle("s1", "A", "completed"),
+            "2026-08-29T10:01:00Z",
+        );
+        assert_eq!(o.pending_triggers.len(), 1);
+    }
+
+    #[test]
+    fn heal_undoes_legacy_auto_stops_but_not_user_ones() {
+        let mut o = orch();
+        o.paused = true;
+        o.push_log(
+            "t1",
+            "cap_hit",
+            "10 fires in the last hour reached max_fires_per_hour=2 — auto-paused",
+        );
+        assert!(heal_legacy_auto_stop(&mut o, "t2"));
+        assert!(!o.paused);
+
+        o.paused = true;
+        o.push_log("t3", "user_paused", "paused from the management page");
+        assert!(!heal_legacy_auto_stop(&mut o, "t4"));
+        assert!(o.paused, "a later user pause wins");
+
+        let mut o = orch();
+        o.enabled = false;
+        o.consecutive_failures = 3;
+        o.push_log(
+            "t1",
+            "backoff",
+            "3 consecutive failures — auto-disabled. Last error: x",
+        );
+        assert!(heal_legacy_auto_stop(&mut o, "2026-08-29T10:00:00Z"));
+        assert!(o.enabled);
+        assert!(o.backoff_until.is_some());
     }
 
     #[test]
