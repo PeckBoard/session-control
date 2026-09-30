@@ -846,6 +846,39 @@ mod tests {
     }
 
     #[test]
+    fn cap_hit_never_pauses() {
+        let mut o = orch();
+        o.caps.max_fires_per_hour = 2;
+        o.stats.fire_times = vec!["2026-08-29T09:10:00Z".into(), "2026-08-29T09:20:00Z".into()];
+        // Every tick for the rest of the hour is skipped, never paused.
+        for m in 0..10 {
+            let now = format!("2026-08-29T10:0{m}:00Z");
+            assert!(!fire(&mut o, Trigger::simple("watchdog"), &now));
+            assert!(!o.paused && o.enabled, "cap must never pause/disable");
+        }
+        let hit = o.log.iter().find(|e| e.kind == "cap_hit").unwrap();
+        assert!(hit.detail.contains("skipping until the window frees up"));
+        assert!(!hit.detail.contains("auto-paused"));
+        // Once the oldest fire leaves the window the cap guard lets the next
+        // tick through on its own — no resume needed.
+        assert!(!over_fire_cap(&mut o, "2026-08-29T10:10:01Z"));
+        assert_eq!(o.stats.fire_times.len(), 1);
+
+        // A row an older release auto-paused at the cap heals on its own.
+        let mut legacy = orch();
+        legacy.paused = true;
+        legacy.push_log("t0", "user_paused", "paused from the management page");
+        legacy.push_log(
+            "t1",
+            "cap_hit",
+            "10 fires in the last hour reached max_fires_per_hour=10 — auto-paused",
+        );
+        assert!(heal_legacy_auto_stop(&mut legacy, "t2"));
+        assert!(!legacy.paused);
+        assert_eq!(legacy.log.last().unwrap().kind, "resumed");
+    }
+
+    #[test]
     fn heal_undoes_legacy_auto_stops_but_not_user_ones() {
         let mut o = orch();
         o.paused = true;
