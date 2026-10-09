@@ -49,9 +49,19 @@ host-supplied because wasm32-unknown-unknown has no clock.
 | `send_image` | Deliver a base64 image (with optional caption) to the target as an attachment. |
 | `find_session` | List sessions across every folder/project (no boundary) to resolve a target id; optional substring `query`. |
 
+| `orchestrator_list` | Read-only summary of every orchestrator (state, goal status, model, brain session, counts). |
+| `orchestrator_get` | Read-only full record of one orchestrator. |
+| `orchestrator_create` | Create an orchestrator (the page's New-form fields and defaults; `folder_id` defaults to the caller's). **Asks the user.** |
+| `orchestrator_update` | Partial update. Widening changes (goal, prompt, model, folder, watch lists, enable, resume, raising a cap) and any edit by another orchestrator's brain **ask the user**; narrowing ones apply immediately. |
+| `orchestrator_delete` | Delete an orchestrator, as the page's Delete does: also stops its brain session's agent (session + transcript kept; result reports `brain_stopped` / `brain_stop_error`, a failed stop never blocks the delete). **Destructive; asks the user.** |
 Every mutating action takes a `session_id`. Discover ids with this plugin's own
 `find_session` tool, or the core `list_sessions` / `search_sessions` MCP tools.
 
+
+The `orchestrator_*` tools share the page's create/update/delete code. Their
+approval prompt offers *Approve once* / *Deny* only — no standing grant — and
+returns `status: awaiting_approval` until answered; re-call with the SAME
+arguments to apply (changed arguments ask afresh).
 ## Boundary
 
 | Target | Behavior |

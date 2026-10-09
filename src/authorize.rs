@@ -1,10 +1,13 @@
-//! Cross-folder approval for mutating session-control tools.
+//! User approval gates for session-control tools.
 //!
-//! Same-folder targets proceed immediately. Cross-folder targets ask the
-//! caller’s user (*Approve once* / *Approve always* / *Deny*), mirroring
-//! common-tools `run_command`. Grants are written into this plugin’s document
-//! store so the Peckboard host can enforce them.
-
+//! - Cross-folder session control: same-folder targets proceed immediately;
+//!   cross-folder targets ask the caller’s user (*Approve once* / *Approve
+//!   always* / *Deny*), mirroring common-tools `run_command`. Grants are
+//!   written into this plugin’s document store so the Peckboard host can
+//!   enforce them.
+//! - Orchestrator management ([`ensure_user_approved`]): every gated create /
+//!   update / delete asks *Approve once* / *Deny* — no standing grant, since
+//!   each one starts or reshapes autonomous agents.
 use serde_json::{Value, json};
 
 use crate::host::{HostFn, call_host};
@@ -144,6 +147,94 @@ pub fn ensure_cross_folder_allowed(target_id: &str, action_label: &str) -> Resul
                 "the user did not approve {action_label} on \"{target_name}\" (answer: {answer})"
             ))
         }
+    }
+}
+
+pub const ORCH_PENDING_COLLECTION: &str = "orch_approval_pending";
+
+/// Ask the calling session's user to approve one orchestrator-management
+/// action. `action_key` names the action + target (one pending ask per
+/// caller per key); `fingerprint` is the exact request — a re-call with
+/// different arguments drops the old ask and asks afresh, so an approval
+/// never carries over to a request the user did not see. Returns `Ready`
+/// only after an *Approve once* answer to this very request.
+pub fn ensure_user_approved(
+    action_key: &str,
+    fingerprint: &str,
+    question: &str,
+) -> Result<Gate, String> {
+    let scope = call_host(HostFn::CallerScope, &json!({}))?;
+    let Some(caller_id) = scope
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        return Err(
+            "this orchestrator change needs user approval, which requires a caller \
+             session (invoke from a session tool call)"
+                .into(),
+        );
+    };
+
+    let pending_key = format!("{caller_id}|{action_key}");
+    let ask = || -> Result<Gate, String> {
+        let token = new_token(&caller_id, action_key);
+        store_put(
+            ORCH_PENDING_COLLECTION,
+            &pending_key,
+            json!({ "token": token, "fingerprint": fingerprint }),
+        )?;
+        call_host(
+            HostFn::AskUser,
+            &json!({
+                "question": question,
+                "options": [APPROVE_ONCE, DENY],
+                "token": token,
+            }),
+        )?;
+        Ok(Gate::Awaiting(json!({
+            "status": "awaiting_approval",
+            "message": "Waiting for the user to approve this orchestrator change. Re-call \
+                        this tool with the SAME arguments after they answer \
+                        (Approve once / Deny).",
+        })))
+    };
+
+    let Some(pending) = store_get(ORCH_PENDING_COLLECTION, &pending_key)? else {
+        return ask();
+    };
+    if pending.get("fingerprint").and_then(|v| v.as_str()) != Some(fingerprint) {
+        return ask();
+    }
+    let token = pending
+        .get("token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "corrupt pending approval record".to_string())?;
+    let ans = call_host(HostFn::GetAnswer, &json!({ "token": token }))?;
+    match ans.get("status").and_then(|v| v.as_str()).unwrap_or("") {
+        "answered" => {}
+        // The question is gone (e.g. the session was cleared) — ask again.
+        "unknown" => return ask(),
+        _ => {
+            return Ok(Gate::Awaiting(json!({
+                "status": "awaiting_approval",
+                "message": "Still waiting for the user to approve this orchestrator change.",
+            })));
+        }
+    }
+    let _ = store_delete(ORCH_PENDING_COLLECTION, &pending_key);
+    let rejected = ans
+        .get("rejected")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let answer = ans.get("answer").and_then(|v| v.as_str()).unwrap_or("");
+    if !rejected && answer.starts_with(APPROVE_ONCE) {
+        Ok(Gate::Ready)
+    } else {
+        Err(format!(
+            "the user did not approve this orchestrator change (answer: {answer})"
+        ))
     }
 }
 

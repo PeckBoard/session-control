@@ -221,6 +221,50 @@ pub fn manifest_json() -> String {
                     "required": ["summary"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "orchestrator_list",
+                "title": "List orchestrators",
+                "description": "Read-only. Every session-control orchestrator (goal-driven autonomous agents shown on the Orchestrators page) as a compact summary: id, name, enabled/paused, goal state + percent + ETA, model, folder, brain session id + busy flag, watched/created session counts, fires, actions, last error. Use orchestrator_get for the full record.",
+                "input_schema": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+            },
+            {
+                "name": "orchestrator_get",
+                "title": "Get an orchestrator",
+                "description": "Read-only. The full record of one orchestrator: goal, trigger prompt, goal status + ETA history, standards, schedule, watchdog, cooldown, caps, watch lists, hats, created sessions, stats, activity log, and brain_busy.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Orchestrator id (from orchestrator_list)." }
+                    },
+                    "required": ["id"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "orchestrator_create",
+                "title": "Create an orchestrator",
+                "description": "Create an orchestrator — a goal-driven config whose brain session autonomously drives the goal to completion (same fields, defaults, and validation as the Orchestrators page's New form). ALWAYS asks the user (Approve once / Deny) and returns status awaiting_approval until they answer; then re-call with the SAME arguments to get the created record. folder_id defaults to your folder.",
+                "input_schema": orchestrator_fields_schema(true)
+            },
+            {
+                "name": "orchestrator_update",
+                "title": "Update an orchestrator",
+                "description": "Partially update an orchestrator: only the fields you pass change (page validation applies); returns the updated record. Changes that widen what it does — goal, prompt, model, folder, watch lists, enabled=true, paused=false, raising a cap — or any change made by ANOTHER orchestrator's brain ask the user (Approve once / Deny) and return status awaiting_approval; re-call with the SAME arguments after they answer. Renaming, disabling, pausing, schedule/standards tweaks, and lowering caps apply immediately.",
+                "input_schema": orchestrator_fields_schema(false)
+            },
+            {
+                "name": "orchestrator_delete",
+                "title": "Delete an orchestrator",
+                "description": "Destructive. Delete an orchestrator so it stops driving its goal and stop its brain session's running agent (same as the page's Delete; the brain session and transcript are kept). Result carries brain_stopped (and brain_stop_error if the stop failed; the delete still happens). ALWAYS asks the user (Approve once / Deny) and returns status awaiting_approval until they answer; then re-call with the same id.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Orchestrator id to delete." }
+                    },
+                    "required": ["id"],
+                    "additionalProperties": false
+                }
             }
         ],
 
@@ -256,6 +300,53 @@ pub fn manifest_json() -> String {
         ],
     });
     manifest.to_string()
+}
+
+/// Input schema shared by `orchestrator_create` (name required) and
+/// `orchestrator_update` (id required, everything else optional). Field
+/// names match the Orchestrators page form body (`page::apply_fields`).
+fn orchestrator_fields_schema(create: bool) -> serde_json::Value {
+    let mut props = serde_json::json!({
+        "name": { "type": "string", "description": "Display name (must not be blank)." },
+        "goal": { "type": "string", "description": "The requirements / instructions the orchestrator drives to completion." },
+        "prompt": { "type": "string", "description": "Optional trigger prompt template. Vars: {{trigger}} {{goal}} {{eta}} {{pending}} {{standards}} {{session_name}} {{outcome}} {{watched_busy_count}}." },
+        "folder_id": { "type": "string", "description": "Folder the brain session lives in." },
+        "model": { "type": "string", "description": "Brain model id, provider-prefixed (e.g. \"claude:...\"); empty = instance default." },
+        "enabled": { "type": "boolean", "description": "Enabled (default true). Re-enabling clears backoff state." },
+        "paused": { "type": "boolean", "description": "Paused (default false)." },
+        "every_minutes": { "type": ["integer", "null"], "minimum": 0, "description": "Schedule: fire every N minutes; null/0 = off (default off)." },
+        "watchdog_minutes": { "type": "integer", "minimum": 0, "description": "Autonomy watchdog minutes, 0 = off (default 15)." },
+        "cooldown_secs": { "type": "integer", "minimum": 0, "description": "Minimum seconds between fires (default 60)." },
+        "max_fires_per_hour": { "type": "integer", "minimum": 1, "description": "Hourly fire cap (default 12, floor 1)." },
+        "max_sessions_created": { "type": "integer", "minimum": 0, "description": "Cap on sessions the brain may create (default 10)." },
+        "watch_sessions": { "type": "array", "items": { "type": "string" }, "description": "Session ids whose idle transitions fire the orchestrator (replaces the list)." },
+        "watch_folders": { "type": "array", "items": { "type": "string" }, "description": "Folder ids to watch (replaces the list)." },
+        "auto_watch_created": { "type": "boolean", "description": "Auto-watch sessions the brain creates (default true)." },
+        "standards": {
+            "type": "object",
+            "description": "Standards the brain enforces (each defaults true; custom defaults empty).",
+            "properties": {
+                "dev": { "type": "boolean" },
+                "testing": { "type": "boolean" },
+                "ux": { "type": "boolean" },
+                "custom": { "type": "string" }
+            },
+            "additionalProperties": false
+        }
+    });
+    let required = if create {
+        serde_json::json!(["name"])
+    } else {
+        props["id"] =
+            serde_json::json!({ "type": "string", "description": "Orchestrator id to update." });
+        serde_json::json!(["id"])
+    };
+    serde_json::json!({
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": false
+    })
 }
 
 #[cfg(test)]
@@ -309,7 +400,12 @@ mod tests {
             "list_managed_sessions",
             "update_goal_status",
             "orchestrator_report",
-            "interrupt_session",
+            "read_session",
+            "orchestrator_list",
+            "orchestrator_get",
+            "orchestrator_create",
+            "orchestrator_update",
+            "orchestrator_delete",
             "find_session",
             "read_session",
         ] {

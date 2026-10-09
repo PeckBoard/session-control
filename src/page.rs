@@ -88,23 +88,27 @@ pub fn serve_authed(payload: Value) -> Result<Value, String> {
     Ok(out.unwrap_or_else(|e| err_json(400, &e)))
 }
 
+/// One orchestrator as the page (and `orchestrator_get`) shows it: the stored
+/// record plus the computed `brain_busy` liveness flag.
+pub fn with_liveness(o: &Orchestrator, now: &str) -> Value {
+    let brain_busy = o
+        .session_id
+        .as_deref()
+        .map(|s| !now.is_empty() && state::is_busy(s, now))
+        .unwrap_or(false);
+    let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
+    if let Some(map) = v.as_object_mut() {
+        map.insert("brain_busy".into(), json!(brain_busy));
+    }
+    v
+}
+
 /// List with computed per-orchestrator liveness fields the page shows.
 fn list_route() -> Result<Value, String> {
     let now = state::clock().unwrap_or_default();
     let orchs: Vec<Value> = state::list_orchestrators()?
-        .into_iter()
-        .map(|o| {
-            let brain_busy = o
-                .session_id
-                .as_deref()
-                .map(|s| !now.is_empty() && state::is_busy(s, &now))
-                .unwrap_or(false);
-            let mut v = serde_json::to_value(&o).unwrap_or(Value::Null);
-            if let Some(map) = v.as_object_mut() {
-                map.insert("brain_busy".into(), json!(brain_busy));
-            }
-            v
-        })
+        .iter()
+        .map(|o| with_liveness(o, &now))
         .collect();
     Ok(ok_json(json!({
         "orchestrators": orchs,
@@ -113,8 +117,9 @@ fn list_route() -> Result<Value, String> {
     })))
 }
 
-/// Fields the page may set on create/update.
-fn apply_fields(o: &mut Orchestrator, body: &Value) -> Result<(), String> {
+/// Fields the page (and the `orchestrator_create` / `orchestrator_update`
+/// tools) may set on create/update. The single home of their validation.
+pub fn apply_fields(o: &mut Orchestrator, body: &Value) -> Result<(), String> {
     if let Some(v) = body.get("name").and_then(|v| v.as_str()) {
         if v.trim().is_empty() {
             return Err("name must not be blank".into());
@@ -196,10 +201,14 @@ fn apply_fields(o: &mut Orchestrator, body: &Value) -> Result<(), String> {
             o.standards.custom = c.to_string();
         }
     }
+    if let Some(p) = body.get("paused").and_then(|v| v.as_bool()) {
+        set_paused(o, p);
+    }
     Ok(())
 }
 
-fn create_route(body: &Value) -> Result<Value, String> {
+/// Create + persist a new orchestrator from page-form-shaped `body`.
+pub fn create_orchestrator(body: &Value) -> Result<Orchestrator, String> {
     let now = state::clock().unwrap_or_else(|| "1970-01-01T00:00:00Z".into());
     state::try_with_engine_lock(|| {
         // Under the lease the existence check makes the id race-free even
@@ -224,12 +233,18 @@ fn create_route(body: &Value) -> Result<Value, String> {
         }
         o.push_log(&now, "report", "orchestrator created");
         state::save_orchestrator(&o)?;
-        Ok(ok_json(json!({ "ok": true, "id": o.id })))
+        Ok(o)
     })?
     .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
-fn update_route(id: &str, body: &Value) -> Result<Value, String> {
+fn create_route(body: &Value) -> Result<Value, String> {
+    let o = create_orchestrator(body)?;
+    Ok(ok_json(json!({ "ok": true, "id": o.id })))
+}
+
+/// Partially update an existing orchestrator; returns the saved record.
+pub fn update_orchestrator(id: &str, body: &Value) -> Result<Orchestrator, String> {
     state::try_with_engine_lock(|| {
         let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
         apply_fields(&mut o, body)?;
@@ -242,33 +257,79 @@ fn update_route(id: &str, body: &Value) -> Result<Value, String> {
                 &json!({ "session_id": sid, "system_prompt": engine::standing_prompt(&o) }),
             );
         }
-        Ok(ok_json(json!({ "ok": true })))
+        Ok(o)
     })?
     .ok_or_else(|| state::BUSY_MSG.to_string())
 }
 
-fn delete_route(id: &str) -> Result<Value, String> {
-    state::try_with_engine_lock(|| {
+fn update_route(id: &str, body: &Value) -> Result<Value, String> {
+    update_orchestrator(id, body)?;
+    Ok(ok_json(json!({ "ok": true })))
+}
+
+/// What [`delete_orchestrator`] did. `brain_stopped` is true when a stop was
+/// sent to the brain session's agent (a no-op host-side if it wasn't
+/// running); a stop failure never blocks the delete and lands in
+/// `brain_stop_error`.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct DeleteOutcome {
+    pub existed: bool,
+    pub brain_stopped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brain_stop_error: Option<String>,
+}
+
+/// Delete an orchestrator record, then stop its brain session's agent (the
+/// session and its transcript are kept). `existed` is false when there was
+/// no such record.
+pub fn delete_orchestrator(id: &str) -> Result<DeleteOutcome, String> {
+    let removed = state::try_with_engine_lock(|| {
+        let removed = state::load_orchestrator(id)?;
         state::store_delete(state::ORCH_COLLECTION, id)?;
-        Ok(ok_json(json!({ "ok": true })))
+        Ok(removed)
     })?
-    .ok_or_else(|| state::BUSY_MSG.to_string())
+    .ok_or_else(|| state::BUSY_MSG.to_string())?;
+    let mut out = DeleteOutcome {
+        existed: removed.is_some(),
+        ..Default::default()
+    };
+    if let Some(brain) = removed.and_then(|o| o.session_id) {
+        match call_host(
+            HostFn::OrchestrateTerminate,
+            &json!({ "session_id": brain }),
+        ) {
+            Ok(_) => out.brain_stopped = true,
+            Err(e) => out.brain_stop_error = Some(e),
+        }
+    }
+    Ok(out)
+}
+
+fn delete_route(id: &str) -> Result<Value, String> {
+    let out = delete_orchestrator(id)?;
+    let mut body = serde_json::to_value(&out).map_err(|e| e.to_string())?;
+    body["ok"] = json!(true);
+    Ok(ok_json(body))
+}
+
+/// Pause / resume one orchestrator. A fresh pause is logged as the user's,
+/// so the legacy auto-pause heal in the engine leaves it alone.
+fn set_paused(o: &mut Orchestrator, paused: bool) {
+    if paused && !o.paused {
+        let now = state::clock().unwrap_or_default();
+        o.push_log(&now, "user_paused", "paused from the management page");
+    }
+    o.paused = paused;
 }
 
 fn pause_route(id: &str, body: &Value) -> Result<Value, String> {
     state::try_with_engine_lock(|| {
         let mut o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
-        let was_paused = o.paused;
-        o.paused = body
+        let paused = body
             .get("paused")
             .and_then(|v| v.as_bool())
             .unwrap_or(!o.paused);
-        if o.paused && !was_paused {
-            // Marks the pause as the user's, so the legacy auto-pause
-            // heal in the engine leaves it alone.
-            let now = state::clock().unwrap_or_default();
-            o.push_log(&now, "user_paused", "paused from the management page");
-        }
+        set_paused(&mut o, paused);
         state::save_orchestrator(&o)?;
         Ok(ok_json(json!({ "ok": true, "paused": o.paused })))
     })?
@@ -438,6 +499,10 @@ const PRESETS = [
 let DATA = { orchestrators: [], global_paused: false, clock: "" };
 let PICKERS = { sessions: [], folders: [], models: [] };
 let editing = null; // null = closed, "" = new, "<id>" = edit
+// Id of the card asking "really delete?" inline. The page runs in a
+// sandboxed iframe without allow-modals, so window.confirm() is a silent
+// "no" — the confirmation lives in the card instead.
+let confirmingDelete = null;
 
 function banner(msg) {
   const el = document.getElementById("banner");
@@ -500,7 +565,11 @@ function render() {
         '<button data-act="dry" data-id="' + esc(o.id) + '">Dry run</button>' +
         '<button data-act="pause" data-id="' + esc(o.id) + '">' + (o.paused ? "Resume" : "Pause") + '</button>' +
         '<button data-act="edit" data-id="' + esc(o.id) + '">Edit</button>' +
-        '<button data-act="del" data-id="' + esc(o.id) + '" class="danger">Delete</button>' +
+        (confirmingDelete === o.id
+          ? '<span class="muted" data-testid="orch-delete-prompt">Delete? Its brain\'s agent is stopped; the brain session and transcript stay.</span>' +
+            '<button data-act="del-yes" data-id="' + esc(o.id) + '" class="danger" data-testid="orch-delete-confirm">Confirm delete</button>' +
+            '<button data-act="del-no" data-id="' + esc(o.id) + '">Cancel</button>'
+          : '<button data-act="del" data-id="' + esc(o.id) + '" class="danger" data-testid="orch-delete">Delete</button>') +
       '</div>' +
       '<div class="muted">' + esc(o.goal || "(no goal)") + '</div>' +
       (pct != null ? '<div class="bar"><div style="width:' + pct + '%"></div></div>' : "") +
@@ -655,9 +724,14 @@ document.getElementById("list").addEventListener("click", async (ev) => {
     banner("");
     if (act === "run") await api("POST", BASE + "/orchestrators/" + id + "/run");
     else if (act === "pause") await api("POST", BASE + "/orchestrators/" + id + "/pause", { paused: !o.paused });
-    else if (act === "del") {
-      if (!confirm("Delete orchestrator \"" + o.name + "\"? Its brain session stays.")) return;
-      await api("POST", BASE + "/orchestrators/" + id + "/delete");
+    else if (act === "del" || act === "del-no") {
+      confirmingDelete = act === "del" ? id : null;
+      render();
+      return;
+    } else if (act === "del-yes") {
+      confirmingDelete = null;
+      const r = await api("POST", BASE + "/orchestrators/" + id + "/delete");
+      if (r && r.brain_stop_error) banner("Deleted, but stopping its brain failed: " + r.brain_stop_error);
     } else if (act === "edit") { openEditor(o); return; }
     else if (act === "dry") {
       const r = await api("POST", BASE + "/orchestrators/" + id + "/dry-run");

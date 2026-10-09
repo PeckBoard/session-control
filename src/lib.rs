@@ -20,6 +20,11 @@
 //! list_managed_sessions, update_goal_status + ETA, orchestrator_report); the
 //! management page (`page.rs`) is served from the global sidebar.
 //!
+//! **Orchestrator management** (0.5.0, `orch_admin.rs`): orchestrator_list /
+//! _get / _create / _update / _delete for any session, sharing the page's
+//! create/update/delete code. Create, delete, and widening updates ask the
+//! user (*Approve once* / *Deny*).
+//!
 //! ## Plugin interface
 //!
 //! Core expects four exports (`peckboard/src/plugin/manager.rs`):
@@ -35,6 +40,7 @@ mod control;
 mod engine;
 mod host;
 mod manifest;
+mod orch_admin;
 mod orch_tools;
 mod page;
 mod state;
@@ -141,6 +147,11 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         "list_managed_sessions" => orch_tools::list_managed_sessions_tool(args),
         "update_goal_status" => orch_tools::update_goal_status_tool(args),
         "orchestrator_report" => orch_tools::orchestrator_report_tool(args),
+        "orchestrator_list" => orch_admin::list_tool(args),
+        "orchestrator_get" => orch_admin::get_tool(args),
+        "orchestrator_create" => orch_admin::create_tool(args),
+        "orchestrator_update" => orch_admin::update_tool(args),
+        "orchestrator_delete" => orch_admin::delete_tool(args),
         other => return cancel(&format!("session-control does not provide tool '{other}'")),
     };
 
