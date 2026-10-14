@@ -478,12 +478,12 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
 const PRESETS = [
   { id: "project-def", label: "Project definition → cards, then implement",
     goal: "Implement every feature in the project definition.\n" +
-      "1. Read PROJECT_DEFINITION.md at the root of this folder's repository (read_file). If it does not exist, call update_goal_status with state=blocked and a note saying so.\n" +
+      "1. Read PROJECT_DEFINITION.md at the root of this folder's repository (read_file), then each section file its Sections index links under project-definition/. If it does not exist, call update_goal_status with state=blocked and a note saying so.\n" +
       "2. Find the project for this folder (list_projects) or create one (create_project).\n" +
       "3. Create one card per feature/requirement in the definition (create_card) — check list_cards first and never duplicate an existing card. Give each card a clear title and a description with acceptance criteria taken from the definition.\n" +
       "4. Drive every card to done: create a session per work area with a fitting hat, review results when sessions go idle, and move_card_to_done only when the work meets the standards.\n" +
-      "Done when every feature in PROJECT_DEFINITION.md has a card and every card is done.",
-    prompt: "Trigger: {{trigger}}. Compare PROJECT_DEFINITION.md against the project's cards: features missing a card, cards in flight, cards finished. Act on the next thing that needs you, then report via orchestrator_report + update_goal_status." },
+      "Done when every feature in PROJECT_DEFINITION.md and its linked section files has a card and every card is done.",
+    prompt: "Trigger: {{trigger}}. Compare PROJECT_DEFINITION.md and the section files it links against the project's cards: features missing a card, cards in flight, cards finished. Act on the next thing that needs you, then report via orchestrator_report + update_goal_status." },
   { id: "backlog", label: "Drive the card backlog to done",
     goal: "Drive this folder's existing card backlog to completion.\n" +
       "Enumerate open cards with list_cards, order them by priority and dependencies (list_card_dependencies), delegate each to a session you create with a fitting hat, verify results against the standards, and move finished cards with move_card_to_done.\n" +
