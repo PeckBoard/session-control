@@ -221,7 +221,7 @@ pub fn dry_run(id: &str) -> Result<Value, String> {
     let o = state::load_orchestrator(id)?.ok_or(format!("orchestrator not found: {id}"))?;
     let t = Trigger::simple("dry-run");
     Ok(json!({
-        "rendered_prompt": render_prompt(&o, &t, &now),
+        "rendered_prompt": run_prompt(&o, &t, &now),
         "standing_prompt": standing_prompt(&o),
     }))
 }
@@ -333,10 +333,12 @@ fn fire(o: &mut Orchestrator, trigger: Trigger, now: &str) -> bool {
         o.push_log(now, "skipped_busy", "brain busy — trigger coalesced");
         return false;
     }
-    let prompt = render_prompt(o, &trigger, now);
+    let prompt = run_prompt(o, &trigger, now);
+    // `fresh`: the host wipes the brain's transcript before delivering, so
+    // every run starts with clean context; its session memory carries over.
     match call_host(
         HostFn::OrchestrateSend,
-        &json!({ "session_id": brain, "text": prompt }),
+        &json!({ "session_id": brain, "text": prompt, "fresh": true }),
     ) {
         Ok(_) => {
             o.consecutive_failures = 0;
@@ -540,7 +542,12 @@ update_goal_status with an initial eta_minutes estimate before doing anything el
 4. Delegate real work to sessions you create; give each a hat. Review results when \
 they go idle.\n\
 5. Call update_goal_status with state=done ONLY when every requirement is implemented \
-and verified.\n{standards}",
+and verified.\n\
+6. MEMORY: your conversation is wiped before every run — only your session memory \
+(listed in your system prompt) and the goal status survive. Anything you need to \
+remember goes into memory: lessons learned, decisions and why, in-flight work, which \
+session does what. Save it with memory_add / memory_update before you finish each \
+run; memory_remove stale entries and memory_compact when the pool grows large.\n{standards}",
         name = o.name,
         goal = if o.goal.trim().is_empty() {
             "(no goal set)"
@@ -594,6 +601,30 @@ driving until it passes."
 }
 
 // ── Prompt rendering ──────────────────────────────────────────────────
+
+/// What a fire actually delivers: the fresh-run header, then the rendered
+/// trigger prompt. The header rides on every run (not just the standing
+/// prompt) so brains created before the memory rule still get it.
+pub fn run_prompt(o: &Orchestrator, t: &Trigger, now: &str) -> String {
+    format!("{}{}", fresh_run_header(o), render_prompt(o, t, now))
+}
+
+fn fresh_run_header(o: &Orchestrator) -> String {
+    let gs = &o.goal_status;
+    let percent = gs.percent.map(|p| format!(", {p}%")).unwrap_or_default();
+    let note = match gs.note.trim() {
+        "" => String::new(),
+        n => format!(" — {n}"),
+    };
+    format!(
+        "[Fresh run: your conversation was wiped. Only your session memory and goal status \
+carry over. Goal status: {state}{percent}{note}. Re-orient from memory and \
+list_managed_sessions. Before you finish this run, save everything you will need next \
+time (lessons learned, decisions, in-flight work, session roles) with memory_add / \
+memory_update — anything not in memory is lost.]\n\n",
+        state = gs.state,
+    )
+}
 
 pub fn render_prompt(o: &Orchestrator, t: &Trigger, now: &str) -> String {
     let base = if o.prompt.trim().is_empty() {
@@ -915,5 +946,18 @@ mod tests {
             push_eta_history(&mut o, "2026-08-29T10:00:00Z", i as u64);
         }
         assert_eq!(o.eta_history.len(), ETA_HISTORY_CAP);
+    }
+
+    #[test]
+    fn every_run_is_fresh_and_demands_memory() {
+        let mut o = orch();
+        o.goal_status.percent = Some(40);
+        o.goal_status.note = "API done".into();
+        let out = run_prompt(&o, &Trigger::simple("watchdog"), "2026-08-29T10:00:00Z");
+        assert!(out.starts_with("[Fresh run"), "{out}");
+        assert!(out.contains("in_progress, 40% — API done"), "{out}");
+        assert!(out.contains("memory_add"), "{out}");
+        assert!(out.contains("Trigger: watchdog"), "{out}");
+        assert!(standing_prompt(&o).contains("6. MEMORY"));
     }
 }
