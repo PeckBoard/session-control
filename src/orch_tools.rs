@@ -73,7 +73,7 @@ session manages you and reviews your output when your turn ends."
 
 // ── Tools ─────────────────────────────────────────────────────────────
 
-/// `create_session { name, model?, hat?, responsibilities? }` — spawn a
+/// `create_session { name, model?, hat?, responsibilities?, folder_id?, folder_path?, folder_name? }` — spawn a
 /// worker-for-more-work session in the caller's folder. When the caller is a
 /// brain: capped, auto-watched, hat recorded, action counted.
 pub fn create_session_tool(args: Value) -> Result<Value, String> {
@@ -97,9 +97,18 @@ pub fn create_session_tool(args: Value) -> Result<Value, String> {
         }
 
         let system_prompt = hat.as_ref().map(|h| hat_prompt(h, &responsibilities));
+        // The host only honours folder_path for the voice assistant (or a
+        // user request); everyone else stays in their own folder.
         let created = call_host(
             HostFn::CreateSession,
-            &json!({ "name": name, "model": model, "system_prompt": system_prompt }),
+            &json!({
+                "name": name,
+                "model": model,
+                "system_prompt": system_prompt,
+                "folder_path": opt_str(&args, "folder_path"),
+                "folder_id": opt_str(&args, "folder_id"),
+                "folder_name": opt_str(&args, "folder_name"),
+            }),
         )?;
         let sid = created
             .get("session")

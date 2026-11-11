@@ -133,14 +133,17 @@ pub fn manifest_json() -> String {
             {
                 "name": "create_session",
                 "title": "Create a session for more work",
-                "description": "Create a new session in your folder when more work is required, optionally wearing a hat (a named scope of responsibility written into its system prompt). When you are an orchestrator brain session the new session is auto-watched — you are re-engaged when its turns end — and it counts against your max_sessions_created cap. Send it work with send_message.",
+                "description": "Create a new session in your folder when more work is required, optionally wearing a hat (a named scope of responsibility written into its system prompt). When you are an orchestrator brain session the new session is auto-watched — you are re-engaged when its turns end — and it counts against your max_sessions_created cap. Send it work with send_message. The voice assistant may pass folder_path to create it in any folder (registered on first use).",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "name": { "type": "string", "description": "Display name for the new session." },
                         "model": { "type": "string", "description": "Optional model id (provider-prefixed, e.g. \"claude:...\"); defaults to the instance default." },
                         "hat": { "type": "string", "description": "Optional hat name, e.g. \"QA\", \"Frontend\", \"Reviewer\"." },
-                        "responsibilities": { "type": "string", "description": "What the hat covers — required to be meaningful when 'hat' is set." }
+                        "responsibilities": { "type": "string", "description": "What the hat covers — required to be meaningful when 'hat' is set." },
+                        "folder_id": { "type": "string", "description": "Voice assistant only: id of an existing folder (from list_folders) to create the session in. Other callers always create in their own folder." },
+                        "folder_path": { "type": "string", "description": "Voice assistant only: absolute path of the folder to create the session in (registered, and the directory created, if missing). Wins over folder_id." },
+                        "folder_name": { "type": "string", "description": "Display name if folder_path has to be registered (default: its last path segment)." }
                     },
                     "required": ["name"],
                     "additionalProperties": false
