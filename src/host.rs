@@ -13,6 +13,9 @@ pub enum HostFn {
     InterruptSession,
     TerminateAgent,
     ClearSession,
+    /// Switch an existing session's model from its next turn (0.5.4, needs
+    /// peckboard core with `peckboard_set_session_model`).
+    SetSessionModel,
     SendMessage,
     /// Read another session's event tail (cross-folder gated like the
     /// mutating actions; needs peckboard core with
@@ -51,6 +54,7 @@ mod imp {
     extern "ExtismHost" {
         fn peckboard_interrupt_session(input: String) -> String;
         fn peckboard_terminate_agent(input: String) -> String;
+        fn peckboard_set_session_model(input: String) -> String;
         fn peckboard_clear_session(input: String) -> String;
         fn peckboard_read_session_events(input: String) -> String;
         fn peckboard_list_all_sessions(input: String) -> String;
@@ -85,6 +89,7 @@ mod imp {
                 HostFn::InterruptSession => peckboard_interrupt_session(s),
                 HostFn::TerminateAgent => peckboard_terminate_agent(s),
                 HostFn::ClearSession => peckboard_clear_session(s),
+                HostFn::SetSessionModel => peckboard_set_session_model(s),
                 HostFn::ReadSessionEvents => peckboard_read_session_events(s),
                 HostFn::SendMessage => peckboard_send_message(s),
                 HostFn::ListSessions => peckboard_list_all_sessions(s),

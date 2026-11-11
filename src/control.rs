@@ -57,6 +57,18 @@ pub fn clear_session_tool(args: Value) -> Result<Value, String> {
         call_host(HostFn::ClearSession, &json!({ "session_id": session_id }))
     })
 }
+/// Switch an existing session's model from its next turn. The host refuses
+/// a switch that crosses a provider or account (that needs a handover).
+pub fn set_session_model_tool(args: Value) -> Result<Value, String> {
+    let session_id = require_str(&args, "session_id")?;
+    let model = require_str(&args, "model")?;
+    gated_action(&session_id, "switch the model of", || {
+        call_host(
+            HostFn::SetSessionModel,
+            &json!({ "session_id": session_id, "model": model }),
+        )
+    })
+}
 
 pub fn send_message_tool(args: Value) -> Result<Value, String> {
     let session_id = require_str(&args, "session_id")?;

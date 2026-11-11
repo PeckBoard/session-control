@@ -73,6 +73,20 @@ pub fn manifest_json() -> String {
                 }
             },
             {
+                "name": "set_session_model",
+                "title": "Switch a session's model",
+                "description": "Switch an existing session to another model (provider-prefixed id, e.g. \"claude:claude-fable-5-2\"). Takes effect on its next turn; a running turn finishes on the current model. Only within the same provider and account: crossing them needs a context handover, which the user starts from that session's Model menu. Same-folder immediate; cross-folder asks Approve once / Always / Deny.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string", "description": "The session to switch." },
+                        "model": { "type": "string", "description": "The model id to switch to (from list_models)." }
+                    },
+                    "required": ["session_id", "model"],
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "send_message",
                 "title": "Send a message to a session",
                 "description": "Deliver a text message to another session as if it were a user message, and resume that session. Same-folder immediate; cross-folder asks Approve once / Always / Deny (re-call after the user answers).",
@@ -411,6 +425,7 @@ mod tests {
             "orchestrator_delete",
             "find_session",
             "read_session",
+            "set_session_model",
         ] {
             assert!(tools.contains(&t), "missing tool {t}");
         }

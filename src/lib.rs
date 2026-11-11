@@ -4,7 +4,7 @@
 //!
 //! **Session control** (MCP tools via `mcp.tool.invoke`):
 //! - **interrupt_session** / **terminate_agent** / **clear_session** /
-//!   **send_message** / **send_image** — mutating actions.
+//!   **set_session_model** / **send_message** / **send_image** — mutating actions.
 //! - **find_session** — folder-blind discovery (no approval prompt).
 //!
 //! Same-folder targets run immediately. Cross-folder mutating actions ask the
@@ -136,6 +136,7 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         "interrupt_session" => control::interrupt_session_tool(args),
         "terminate_agent" => control::terminate_agent_tool(args),
         "clear_session" => control::clear_session_tool(args),
+        "set_session_model" => control::set_session_model_tool(args),
         "send_message" => control::send_message_tool(args),
         "send_image" => control::send_image_tool(args),
         "read_session" => control::read_session_tool(args),
@@ -165,6 +166,7 @@ fn handle_invoke(payload: serde_json::Value) -> String {
                 "interrupt_session"
                     | "terminate_agent"
                     | "clear_session"
+                    | "set_session_model"
                     | "send_message"
                     | "send_image"
             );
