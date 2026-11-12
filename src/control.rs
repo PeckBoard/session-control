@@ -29,7 +29,7 @@ fn gated_action(
     then: impl FnOnce() -> Result<Value, String>,
 ) -> Result<Value, String> {
     match authorize::ensure_cross_folder_allowed(target_id, action_label)? {
-        Gate::Awaiting(payload) => Ok(payload),
+        Gate::Awaiting(payload) | Gate::Denied(payload) => Ok(payload),
         Gate::Ready => then(),
     }
 }

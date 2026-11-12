@@ -160,7 +160,8 @@ fn handle_invoke(payload: serde_json::Value) -> String {
         Ok(value) => {
             // Count control actions taken by an orchestrator brain toward its
             // action total + activity feed (the orchestrator tools log
-            // themselves; awaiting_approval gates don't count as actions).
+            // themselves; approval-gate results — awaiting_approval /
+            // denied — don't count as actions).
             let mutating = matches!(
                 tool.as_str(),
                 "interrupt_session"
@@ -170,9 +171,11 @@ fn handle_invoke(payload: serde_json::Value) -> String {
                     | "send_message"
                     | "send_image"
             );
-            let awaiting =
-                value.get("status").and_then(|s| s.as_str()) == Some("awaiting_approval");
-            if mutating && !awaiting {
+            let gated = matches!(
+                value.get("status").and_then(|s| s.as_str()),
+                Some("awaiting_approval" | "denied")
+            );
+            if mutating && !gated {
                 orch_tools::attribute_action(&tool, target.as_deref());
             }
             allow(value)

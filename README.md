@@ -69,6 +69,11 @@ arguments to apply (changed arguments ask afresh).
 | Same folder as the caller | Act immediately |
 | Other folder | Ask the user: **Approve once** / **Approve always** / **Deny** |
 | After Always | This controlling session may act on any foreign-folder session without asking again |
+
+A cross-folder call returns `status: awaiting_approval` while the prompt is
+open. After **Deny** the next call returns `status: denied` once; the call
+after that asks afresh. A pending ask whose prompt is gone (session cleared)
+asks again instead of waiting forever.
 | `find_session` | Always folder-blind (discovery only; no prompt) |
 
 Peckboard core enforces the same Always/Once grants on the host functions, so

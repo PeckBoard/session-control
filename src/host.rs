@@ -172,6 +172,7 @@ pub mod fake {
         /// Session ids `orchestrate_terminate` was called on.
         static TERMINATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static FAIL_TERMINATE: RefCell<bool> = const { RefCell::new(false) };
+        static SESSIONS: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn set_caller(session_id: &str, folder_id: &str) {
@@ -182,6 +183,20 @@ pub mod fake {
 
     pub fn terminated() -> Vec<String> {
         TERMINATED.with(|t| t.borrow().clone())
+    }
+
+    /// Make `session_id` visible to `ListSessions` (the lookup the
+    /// cross-folder gate does on its target).
+    pub fn add_session(session_id: &str, name: &str, folder_id: &str) {
+        SESSIONS.with(|s| {
+            s.borrow_mut()
+                .push(json!({ "session_id": session_id, "name": name, "folder_id": folder_id }))
+        });
+    }
+
+    /// Drop a question as if it never reached the session (cleared / lost).
+    pub fn forget_question(token: &str) {
+        QUESTIONS.with(|q| q.borrow_mut().remove(token));
     }
 
     pub fn fail_terminate(fail: bool) {
@@ -269,6 +284,10 @@ pub mod fake {
                         json!({ "status": "answered", "answer": a, "rejected": false })
                     }
                 }
+            }
+            HostFn::ListSessions => {
+                let sessions = SESSIONS.with(|s| s.borrow().clone());
+                json!({ "sessions": sessions })
             }
             HostFn::OrchestrateTerminate => {
                 if FAIL_TERMINATE.with(|f| *f.borrow()) {

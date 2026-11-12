@@ -71,7 +71,7 @@ fn gated(
     then: impl FnOnce() -> Result<Value, String>,
 ) -> Result<Value, String> {
     match authorize::ensure_user_approved(action_key, &args.to_string(), question)? {
-        Gate::Awaiting(payload) => Ok(payload),
+        Gate::Awaiting(payload) | Gate::Denied(payload) => Ok(payload),
         Gate::Ready => then(),
     }
 }
