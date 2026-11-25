@@ -336,9 +336,12 @@ fn fire(o: &mut Orchestrator, trigger: Trigger, now: &str) -> bool {
     let prompt = run_prompt(o, &trigger, now);
     // `fresh`: the host wipes the brain's transcript before delivering, so
     // every run starts with clean context; its session memory carries over.
+    // `model`: the brain session keeps the model it was created with, so the
+    // orchestrator's current model rides on every run and the host moves
+    // the session to it (needs a core that reads it; older cores ignore it).
     match call_host(
         HostFn::OrchestrateSend,
-        &json!({ "session_id": brain, "text": prompt, "fresh": true }),
+        &json!({ "session_id": brain, "text": prompt, "fresh": true, "model": o.model }),
     ) {
         Ok(_) => {
             o.consecutive_failures = 0;
